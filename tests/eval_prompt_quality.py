@@ -303,7 +303,13 @@ def build_metrics(judge):
 
 # ── App call ──────────────────────────────────────────────────────────────────
 
-def call_app(query: str, lang: str, session_id: str) -> tuple[str, str, float]:
+def call_app(query: str, lang: str, session_id: str) -> tuple[str, str, float, list]:
+    """Call the chat API. Returns (response, path, wall_ms, contexts).
+
+    `contexts` is the list of per-RAG-call capture dicts surfaced under
+    `metrics.contexts` when the app runs with EVAL_EXPOSE_CONTEXTS=true; empty
+    otherwise. Each entry holds search_query / contexts / scores / doc_ids.
+    """
     payload = json.dumps({
         "query":       query,
         "session_id":  session_id,
@@ -322,10 +328,16 @@ def call_app(query: str, lang: str, session_id: str) -> tuple[str, str, float]:
         wall_ms = (time.perf_counter() - t0) * 1000
         lines = [ln for ln in raw.splitlines() if ln.strip()]
         r = json.loads(lines[-1]) if lines else {}
-        return r.get("response", ""), r.get("metrics", {}).get("path", "llm"), round(wall_ms, 1)
+        metrics = r.get("metrics", {})
+        return (
+            r.get("response", ""),
+            metrics.get("path", "llm"),
+            round(wall_ms, 1),
+            metrics.get("contexts", []),
+        )
     except Exception as e:
         wall_ms = (time.perf_counter() - t0) * 1000
-        return f"ERROR: {e}", "error", round(wall_ms, 1)
+        return f"ERROR: {e}", "error", round(wall_ms, 1), []
 
 
 # ── Score extraction ──────────────────────────────────────────────────────────
@@ -387,17 +399,21 @@ def run_eval():
         query    = row["query"]
         lang     = row["lang"]
         expected = row.get("expected_answer", "").strip()
-        response, path, ms = call_app(query, lang, f"eval-{run_id}-{i}")
+        response, path, ms, contexts = call_app(query, lang, f"eval-{run_id}-{i}")
+
+        # Flatten the captured chunks across all RAG calls for this query (RAGAS input).
+        retrieved_contexts = [c for cap in contexts for c in cap.get("contexts", [])]
 
         raw_results.append({
-            "label":           row.get("label", ""),
-            "lang":            lang,
-            "query":           query,
-            "expected_intent": row.get("expected_intent", ""),
-            "expected_answer": expected,
-            "path":            path,
-            "wall_ms":         ms,
-            "actual_output":   response,
+            "label":              row.get("label", ""),
+            "lang":               lang,
+            "query":              query,
+            "expected_intent":    row.get("expected_intent", ""),
+            "expected_answer":    expected,
+            "path":               path,
+            "wall_ms":            ms,
+            "actual_output":      response,
+            "retrieved_contexts": retrieved_contexts,
         })
         test_cases.append(LLMTestCase(
             input=query,
@@ -405,7 +421,8 @@ def run_eval():
             expected_output=expected or None,
         ))
         icon = "⚡" if path == "fast" else ("🔁" if path == "llm" else "❌")
-        print(f"  [{i:3d}/{len(rows)}] {icon} {ms:6.1f}ms  {query[:55]}")
+        ctx_marker = f" 📄{len(retrieved_contexts)}" if retrieved_contexts else ""
+        print(f"  [{i:3d}/{len(rows)}] {icon} {ms:6.1f}ms{ctx_marker}  {query[:55]}")
 
     # ── Step 2: score with each judge ─────────────────────────────────────────
     sample_metrics = build_metrics(None)

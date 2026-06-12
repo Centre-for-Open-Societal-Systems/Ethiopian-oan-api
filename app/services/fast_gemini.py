@@ -353,7 +353,7 @@ class FastGeminiService:
                         metrics['first_tool_start'] = t_tool_start
                     logger.info(f"Tool call #{tool_round}: {tool_name}({tool_args})")
 
-                    tool_result = await self._execute_tool(tool_name, tool_args)
+                    tool_result = await self._execute_tool(tool_name, tool_args, metrics)
 
                     t_tool_end = time.perf_counter()
                     tool_duration = (t_tool_end - t_tool_start) * 1000
@@ -400,7 +400,7 @@ class FastGeminiService:
             yield error_msg
 
     @observe(name="tool_call")
-    async def _execute_tool(self, tool_name: str, args: Dict) -> str:
+    async def _execute_tool(self, tool_name: str, args: Dict, metrics: Optional[Dict[str, Any]] = None) -> str:
         """Execute a tool and return its result."""
         update_current_observation(
             input={"tool": tool_name, "args": args},
@@ -473,12 +473,18 @@ class FastGeminiService:
                 result = await forward_geocode(args.get("place_name", ""))
             elif tool_name == "search_documents":
                 from agents.tools.rag_router import search_documents
+                # Dev/eval only: capture the retrieved chunks + the LLM-generated search
+                # query so the RAGAS eval can score retrieval. No effect when the flag is off.
+                cap = {} if (metrics is not None and settings.eval_expose_contexts) else None
                 result = await asyncio.to_thread(
                     search_documents,
                     query=args.get("query", ""),
                     top_k=int(args.get("top_k", 5)),
-                    type=args.get("type")
+                    type=args.get("type"),
+                    capture=cap,
                 )
+                if cap is not None:
+                    metrics.setdefault("rag_contexts", []).append(cap)
             else:
                 result = f"Tool {tool_name} not implemented"
 

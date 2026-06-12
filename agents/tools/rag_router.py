@@ -19,7 +19,8 @@ logger.info(f"RAG Provider configured: {RAG_PROVIDER}")
 def search_documents(
     query: str,
     top_k: int = 10,
-    type: Optional[str] = None
+    type: Optional[str] = None,
+    capture: Optional[dict] = None,
 ) -> str:
     """
     Semantic search for videos and documents. Routes to the configured RAG provider.
@@ -32,6 +33,9 @@ def search_documents(
         top_k: Maximum number of results to return (default: 10)
         type: Filter by document type: [`video`, `document`].
               Default is None, which means all types are considered.
+        capture: Optional dict (dev/eval only). When provided and the provider is Cosdata,
+              it is populated with the structured retrieval result (contexts/scores/doc_ids)
+              for the RAGAS eval. Ignored by the Marqo path.
 
     Returns:
         search_results: Formatted string with search results
@@ -42,7 +46,7 @@ def search_documents(
     if RAG_PROVIDER == 'cosdata':
         from agents.tools.search_cosdata import search_documents_cosdata
         logger.debug(f"Routing search to Cosdata: query='{query}', top_k={top_k}, type={type}")
-        return search_documents_cosdata(query=query, top_k=top_k, type=type)
+        return search_documents_cosdata(query=query, top_k=top_k, type=type, capture=capture)
     else:
         # Default to Marqo
         from agents.tools.search import search_documents as search_documents_marqo

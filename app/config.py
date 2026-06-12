@@ -96,6 +96,10 @@ class Settings(BaseSettings):
 
     # RAG Configuration
     rag_provider: str = os.getenv("RAG_PROVIDER", "marqo")  # "marqo" or "cosdata"
+    # Dev/eval only: surface the retrieved RAG chunks (and the LLM-generated search
+    # query) in the chat response `metrics` so the RAGAS eval can score retrieval.
+    # Default off — prod responses are unchanged.
+    eval_expose_contexts: bool = os.getenv("EVAL_EXPOSE_CONTEXTS", "false").lower() == "true"
 
     # Intent Router Configuration
     enable_intent_router: bool = os.getenv("ENABLE_INTENT_ROUTER", "true").lower() == "true"

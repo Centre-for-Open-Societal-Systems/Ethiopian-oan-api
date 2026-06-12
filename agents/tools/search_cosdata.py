@@ -151,7 +151,8 @@ def load_document_store():
 def search_documents_cosdata(
     query: str,
     top_k: int = 10,
-    type: Optional[str] = None
+    type: Optional[str] = None,
+    capture: Optional[dict] = None,
 ) -> str:
     """
     Semantic search for agricultural knowledge documents and videos using Cosdata vector database.
@@ -161,6 +162,10 @@ def search_documents_cosdata(
         top_k: Maximum number of results to return (default: 10)
         type: Filter by document type: [`video`, `document`].
               Default is None, which means all types are considered.
+        capture: Optional dict (dev/eval only). When provided, it is populated with the
+              structured retrieval result — `search_query`, `contexts` (per-chunk text),
+              `scores`, and `doc_ids` — so the RAGAS eval can score retrieval. Does not
+              affect the returned string or any prod behavior.
 
     Returns:
         search_results: Formatted string with search results or message if no data available
@@ -194,6 +199,8 @@ def search_documents_cosdata(
         if not results:
             total_time = time.time() - start_time
             logger.info(f"RAG total time: {total_time:.3f}s - No results found")
+            if capture is not None:
+                capture.update({"search_query": query, "contexts": [], "scores": [], "doc_ids": []})
             return f"No results found for `{query}`. The information you're looking for may not be available in our knowledge base."
 
         # Build search hits from results using document store
@@ -228,7 +235,16 @@ def search_documents_cosdata(
         if not search_hits:
             total_time = time.time() - start_time
             logger.info(f"RAG total time: {total_time:.3f}s - No results after filtering")
+            if capture is not None:
+                capture.update({"search_query": query, "contexts": [], "scores": [], "doc_ids": []})
             return f"No results found for `{query}`. The information you're looking for may not be available in our knowledge base."
+
+        # Surface structured contexts for the eval harness (dev/eval only).
+        if capture is not None:
+            capture["search_query"] = query
+            capture["contexts"] = [hit.processed_text for hit in search_hits]
+            capture["scores"] = [hit.score for hit in search_hits]
+            capture["doc_ids"] = [hit.doc_id for hit in search_hits]
 
         # Format results
         document_string = '\n\n----\n\n'.join([str(doc) for doc in search_hits])
