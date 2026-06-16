@@ -82,3 +82,11 @@ charset-normalizer
 # Evaluation (DeepEval prompt-quality harness — tests/eval_prompt_quality.py)
 # NOTE: dev/eval-only dependency — exclude for production (heavy, not used at runtime).
 deepeval>=4.0.5
+
+# RAGAS retrieval eval (tests/rag_ragas_eval.py) — DO NOT install into this environment.
+# ragas 0.2.x pulls langchain-openai, which pins openai<2 and WILL break pydantic-ai
+# (needs openai>=2). Install in an ISOLATED venv via tests/setup_ragas_venv.sh, which
+# creates /opt/ragas-venv with the pins below:
+#   ragas==0.2.15
+#   langchain<0.4
+#   langchain-openai<0.3
