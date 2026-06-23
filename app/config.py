@@ -100,6 +100,11 @@ class Settings(BaseSettings):
     # query) in the chat response `metrics` so the RAGAS eval can score retrieval.
     # Default off — prod responses are unchanged.
     eval_expose_contexts: bool = os.getenv("EVAL_EXPOSE_CONTEXTS", "false").lower() == "true"
+    # Cross-encoder reranker between dense search and the top_k cut (Task #3 experiment).
+    # Default off — re-ranks an over-fetched candidate pool to lift fact-bearing chunks into top_k.
+    rag_rerank: bool = os.getenv("RAG_RERANK", "false").lower() == "true"
+    rag_reranker_model: str = os.getenv("RAG_RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+    rag_rerank_candidates: int = int(os.getenv("RAG_RERANK_CANDIDATES", "20"))
 
     # Intent Router Configuration
     enable_intent_router: bool = os.getenv("ENABLE_INTENT_ROUTER", "true").lower() == "true"

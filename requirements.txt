@@ -48,7 +48,7 @@ asgiref
 # Vector DB
 marqo
 cosdata-client>=0.2.2
-sentence-transformers>=2.2.0
+sentence-transformers>=2.2.0  # also provides CrossEncoder for the RAG_RERANK reranker (Task #3)
 
 # AWS
 boto3
