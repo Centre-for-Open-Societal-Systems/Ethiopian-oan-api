@@ -127,7 +127,7 @@ services:
     restart: unless-stopped
     networks:
       - oan_network
-    entrypoint: /app/docker-entrypoint.sh
+    entrypoint: /entrypoint.sh
 
   # omniasr:
   #   build: ./services/omniasr

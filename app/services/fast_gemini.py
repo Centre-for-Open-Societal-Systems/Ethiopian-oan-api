@@ -17,6 +17,7 @@ from helpers.langfuse_client import (
 )
 openai = get_openai_module()
 from helpers.utils import get_logger, get_prompt, get_today_date_str
+from app.config import settings
 
 logger = get_logger(__name__)
 
@@ -126,12 +127,34 @@ OPENAI_TOOLS = [
 ]
 
 
+# Harmony / channel-style reasoning markers some models (e.g. Gemma-4) leak
+# when vLLM is started without --reasoning-parser. We strip them defensively.
+_HARMONY_BLOCK_RE = re.compile(
+    r'<\|?(?:channel|message|start|end|return)\|?>[^<]*?<\|?/?(?:channel|message)\|?>',
+    re.DOTALL,
+)
+_HARMONY_BARE_RE = re.compile(
+    r'<\|?(?:channel|message|start|end|return)\|?>',
+)
+
+
+def _strip_harmony_tokens(text: str) -> str:
+    text = _HARMONY_BLOCK_RE.sub("", text)
+    text = _HARMONY_BARE_RE.sub("", text)
+    return text
+
+
 def _make_openai_client(async_mode: bool = True):
     """Create an OpenAI client pointed at the configured LLM backend."""
-    base_url = os.getenv("OPENAI_BASE_URL")
+    provider = os.getenv("LLM_PROVIDER", "ollama").lower()
+    if provider == "vllm":
+        base_url = os.getenv("TRITON_LLM_URL")
+        api_key = os.getenv("TRITON_LLM_API_KEY") or "vllm"
+    else:
+        base_url = os.getenv("OPENAI_BASE_URL")
+        api_key = os.getenv("OPENROUTER_API_KEY") or "ollama"
     if base_url and not base_url.rstrip('/').endswith('/v1'):
         base_url = base_url.rstrip('/') + '/v1'
-    api_key = os.getenv("OPENROUTER_API_KEY") or "ollama"
     if async_mode:
         return openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
     return openai.OpenAI(base_url=base_url, api_key=api_key)
@@ -237,12 +260,17 @@ class FastGeminiService:
                 logger.info(f"LLM call round {tool_round}...")
                 accumulated_tool_calls: Dict[int, Dict] = {}
                 accumulated_text = ""
+                content_buffer = ""
 
                 stream = await self._client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     tools=OPENAI_TOOLS,
                     temperature=0.2,
+                    # Reserve output room within the model's context window so the
+                    # server never rejects with "0 output tokens" once the prompt +
+                    # RAG payload grows. Configurable via LLM_MAX_OUTPUT_TOKENS.
+                    max_tokens=settings.llm_max_output_tokens,
                     stream=True,
                 )
 
@@ -252,11 +280,18 @@ class FastGeminiService:
                     delta = chunk.choices[0].delta
 
                     if delta.content:
-                        accumulated_text += delta.content
-                        if not first_token_recorded:
-                            metrics['first_token'] = time.perf_counter()
-                            first_token_recorded = True
-                        yield delta.content
+                        content_buffer += delta.content
+                        # Hold the last 32 chars in case a special token spans a chunk boundary.
+                        if len(content_buffer) > 32:
+                            safe_prefix = content_buffer[:-32]
+                            content_buffer = content_buffer[-32:]
+                            cleaned = _strip_harmony_tokens(safe_prefix)
+                            if cleaned:
+                                accumulated_text += cleaned
+                                if not first_token_recorded:
+                                    metrics['first_token'] = time.perf_counter()
+                                    first_token_recorded = True
+                                yield cleaned
 
                     # Accumulate tool call deltas (arrive as fragments across chunks)
                     if delta.tool_calls:
@@ -274,6 +309,17 @@ class FastGeminiService:
                                     accumulated_tool_calls[idx]["function"]["name"] += tc.function.name
                                 if tc.function.arguments:
                                     accumulated_tool_calls[idx]["function"]["arguments"] += tc.function.arguments
+
+                # Flush any text remaining in the carry buffer after the stream ends.
+                if content_buffer:
+                    cleaned = _strip_harmony_tokens(content_buffer)
+                    content_buffer = ""
+                    if cleaned:
+                        accumulated_text += cleaned
+                        if not first_token_recorded:
+                            metrics['first_token'] = time.perf_counter()
+                            first_token_recorded = True
+                        yield cleaned
 
                 if not accumulated_tool_calls:
                     logger.info(f"Response complete after {tool_round} round(s)")

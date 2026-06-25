@@ -1,0 +1,413 @@
+{
+  "model": "gemma-4-26b-a4b",
+  "fast_n": 5,
+  "llm_n": 3,
+  "warmup": 1,
+  "results": [
+    {
+      "label": "EN crop price — full match",
+      "lang": "en",
+      "query": "What is the price of maize in Bishoftu?",
+      "path": "fast",
+      "fast": {
+        "avg": 14.4,
+        "p50": 13.6,
+        "p90": 21.0,
+        "p99": 21.0,
+        "min": 7.8,
+        "max": 21.0,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2064.8,
+        "p50": 2067.1,
+        "p90": 2072.8,
+        "p99": 2072.8,
+        "min": 2054.4,
+        "max": 2072.8,
+        "n": 3
+      },
+      "speedup": 143.4
+    },
+    {
+      "label": "EN crop price — partial",
+      "lang": "en",
+      "query": "What is the current price of teff?",
+      "path": "fast",
+      "fast": {
+        "avg": 13.0,
+        "p50": 12.5,
+        "p90": 15.4,
+        "p99": 15.4,
+        "min": 11.1,
+        "max": 15.4,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2050.1,
+        "p50": 2080.8,
+        "p90": 2083.2,
+        "p99": 2083.2,
+        "min": 1986.4,
+        "max": 2083.2,
+        "n": 3
+      },
+      "speedup": 157.7
+    },
+    {
+      "label": "EN livestock price — full match",
+      "lang": "en",
+      "query": "How much does a goat cost in Miyo?",
+      "path": "fast",
+      "fast": {
+        "avg": 6.5,
+        "p50": 5.8,
+        "p90": 9.9,
+        "p99": 9.9,
+        "min": 4.3,
+        "max": 9.9,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2155.4,
+        "p50": 2094.5,
+        "p90": 2280.7,
+        "p99": 2280.7,
+        "min": 2090.9,
+        "max": 2280.7,
+        "n": 3
+      },
+      "speedup": 331.6
+    },
+    {
+      "label": "EN livestock price — partial",
+      "lang": "en",
+      "query": "What is the current price of sheep?",
+      "path": "fast",
+      "fast": {
+        "avg": 12.6,
+        "p50": 12.1,
+        "p90": 15.5,
+        "p99": 15.5,
+        "min": 10.0,
+        "max": 15.5,
+        "n": 5
+      },
+      "llm": {
+        "avg": 1975.7,
+        "p50": 2035.8,
+        "p90": 2086.5,
+        "p99": 2086.5,
+        "min": 1804.8,
+        "max": 2086.5,
+        "n": 3
+      },
+      "speedup": 156.8
+    },
+    {
+      "label": "EN marketplace listing",
+      "lang": "en",
+      "query": "Show me all active crop marketplaces",
+      "path": "fast",
+      "fast": {
+        "avg": 16.6,
+        "p50": 15.1,
+        "p90": 24.4,
+        "p99": 24.4,
+        "min": 6.7,
+        "max": 24.4,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2094.3,
+        "p50": 2091.3,
+        "p90": 2104.5,
+        "p99": 2104.5,
+        "min": 2087.0,
+        "max": 2104.5,
+        "n": 3
+      },
+      "speedup": 126.2
+    },
+    {
+      "label": "AM crop price — full match",
+      "lang": "am",
+      "query": "በቢሾፍቱ ገበያ የስንዴ ዋጋ ስንት ነው?",
+      "path": "fast",
+      "fast": {
+        "avg": 7.0,
+        "p50": 4.9,
+        "p90": 13.2,
+        "p99": 13.2,
+        "min": 4.3,
+        "max": 13.2,
+        "n": 5
+      },
+      "llm": {
+        "avg": 1770.6,
+        "p50": 1621.4,
+        "p90": 2094.7,
+        "p99": 2094.7,
+        "min": 1595.8,
+        "max": 2094.7,
+        "n": 3
+      },
+      "speedup": 252.9
+    },
+    {
+      "label": "AM crop price — full match 2",
+      "lang": "am",
+      "query": "በቢሾፍቱ ገበያ የበቆሎ ዋጋ ምን ያህል ነው?",
+      "path": "fast",
+      "fast": {
+        "avg": 9.4,
+        "p50": 8.3,
+        "p90": 16.3,
+        "p99": 16.3,
+        "min": 5.1,
+        "max": 16.3,
+        "n": 5
+      },
+      "llm": {
+        "avg": 1940.4,
+        "p50": 2098.9,
+        "p90": 2103.3,
+        "p99": 2103.3,
+        "min": 1618.9,
+        "max": 2103.3,
+        "n": 3
+      },
+      "speedup": 206.4
+    },
+    {
+      "label": "AM crop price — partial",
+      "lang": "am",
+      "query": "የጤፍ ዋጋ ምን ያህል ነው?",
+      "path": "fast",
+      "fast": {
+        "avg": 14.0,
+        "p50": 13.7,
+        "p90": 15.0,
+        "p99": 15.0,
+        "min": 13.6,
+        "max": 15.0,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2084.8,
+        "p50": 2083.0,
+        "p90": 2088.5,
+        "p99": 2088.5,
+        "min": 2082.8,
+        "max": 2088.5,
+        "n": 3
+      },
+      "speedup": 148.9
+    },
+    {
+      "label": "AM crop price — partial 2",
+      "lang": "am",
+      "query": "የስንዴ ዋጋ ምን ያህል ነው?",
+      "path": "fast",
+      "fast": {
+        "avg": 14.9,
+        "p50": 14.2,
+        "p90": 21.6,
+        "p99": 21.6,
+        "min": 12.0,
+        "max": 21.6,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2087.2,
+        "p50": 2086.9,
+        "p90": 2088.9,
+        "p99": 2088.9,
+        "min": 2085.9,
+        "max": 2088.9,
+        "n": 3
+      },
+      "speedup": 140.1
+    },
+    {
+      "label": "AM livestock price — full match",
+      "lang": "am",
+      "query": "በሜኢሶ የፍየል ዋጋ ምን ያህል ነው?",
+      "path": "fast",
+      "fast": {
+        "avg": 11.8,
+        "p50": 7.7,
+        "p90": 21.3,
+        "p99": 21.3,
+        "min": 7.5,
+        "max": 21.3,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2094.8,
+        "p50": 2096.0,
+        "p90": 2097.3,
+        "p99": 2097.3,
+        "min": 2091.1,
+        "max": 2097.3,
+        "n": 3
+      },
+      "speedup": 177.5
+    },
+    {
+      "label": "AM livestock price — full match 2",
+      "lang": "am",
+      "query": "በያሎ የበሬ ዋጋ ምን ያህል ነው?",
+      "path": "fast",
+      "fast": {
+        "avg": 11.0,
+        "p50": 9.0,
+        "p90": 17.7,
+        "p99": 17.7,
+        "min": 8.1,
+        "max": 17.7,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2098.9,
+        "p50": 2098.5,
+        "p90": 2106.3,
+        "p99": 2106.3,
+        "min": 2091.7,
+        "max": 2106.3,
+        "n": 3
+      },
+      "speedup": 190.8
+    },
+    {
+      "label": "AM livestock price — partial",
+      "lang": "am",
+      "query": "የፍየል ዋጋ ስንት ነው?",
+      "path": "fast",
+      "fast": {
+        "avg": 13.7,
+        "p50": 12.7,
+        "p90": 20.2,
+        "p99": 20.2,
+        "min": 10.5,
+        "max": 20.2,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2097.8,
+        "p50": 2092.0,
+        "p90": 2109.6,
+        "p99": 2109.6,
+        "min": 2092.0,
+        "max": 2109.6,
+        "n": 3
+      },
+      "speedup": 153.1
+    },
+    {
+      "label": "AM livestock price — partial 2",
+      "lang": "am",
+      "query": "የበግ ዋጋ ምን ያህል ነው?",
+      "path": "fast",
+      "fast": {
+        "avg": 15.4,
+        "p50": 13.2,
+        "p90": 19.3,
+        "p99": 19.3,
+        "min": 12.4,
+        "max": 19.3,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2096.9,
+        "p50": 2098.1,
+        "p90": 2098.2,
+        "p99": 2098.2,
+        "min": 2094.4,
+        "max": 2098.2,
+        "n": 3
+      },
+      "speedup": 136.2
+    },
+    {
+      "label": "AM marketplace listing",
+      "lang": "am",
+      "query": "ሁሉንም ንቁ ገበያዎች አሳየኝ",
+      "path": "fast",
+      "fast": {
+        "avg": 14.1,
+        "p50": 13.2,
+        "p90": 26.9,
+        "p99": 26.9,
+        "min": 5.3,
+        "max": 26.9,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2094.1,
+        "p50": 2094.2,
+        "p90": 2096.4,
+        "p99": 2096.4,
+        "min": 2091.6,
+        "max": 2096.4,
+        "n": 3
+      },
+      "speedup": 148.5
+    },
+    {
+      "label": "AM livestock marketplaces",
+      "lang": "am",
+      "query": "ሁሉንም የከብት ገበያዎች ዝርዝር",
+      "path": "fast",
+      "fast": {
+        "avg": 13.7,
+        "p50": 16.1,
+        "p90": 19.6,
+        "p99": 19.6,
+        "min": 6.1,
+        "max": 19.6,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2102.7,
+        "p50": 2101.6,
+        "p90": 2109.0,
+        "p99": 2109.0,
+        "min": 2097.5,
+        "max": 2109.0,
+        "n": 3
+      },
+      "speedup": 153.5
+    },
+    {
+      "label": "AM crop listing at market",
+      "lang": "am",
+      "query": "የቢሾፍቱ የሰብል ዝርዝር አሳየኝ",
+      "path": "fast",
+      "fast": {
+        "avg": 12.3,
+        "p50": 9.7,
+        "p90": 21.4,
+        "p99": 21.4,
+        "min": 6.7,
+        "max": 21.4,
+        "n": 5
+      },
+      "llm": {
+        "avg": 2099.7,
+        "p50": 2101.6,
+        "p90": 2102.0,
+        "p99": 2102.0,
+        "min": 2095.4,
+        "max": 2102.0,
+        "n": 3
+      },
+      "speedup": 170.7
+    }
+  ],
+  "aggregate": {
+    "avg_fast_ms": 12.5,
+    "avg_llm_ms": 2056.8,
+    "avg_speedup": 174.6
+  }
+}

@@ -89,9 +89,25 @@ class Settings(BaseSettings):
     llm_provider: Optional[str] = None
     llm_model_name: Optional[str] = None
     marqo_index_name: Optional[str] = None
+    # Output-token cap reserved within the model's context window. Bounds latency/cost
+    # and prevents the tool loop from consuming the whole window (the "0 output tokens"
+    # rejection). Keep input + this value <= the server's --max-model-len.
+    llm_max_output_tokens: int = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "1024"))
 
     # RAG Configuration
     rag_provider: str = os.getenv("RAG_PROVIDER", "marqo")  # "marqo" or "cosdata"
+
+    # Intent Router Configuration
+    enable_intent_router: bool = os.getenv("ENABLE_INTENT_ROUTER", "true").lower() == "true"
+    intent_router_high_threshold: float = float(os.getenv("INTENT_ROUTER_HIGH_THRESHOLD", "0.8"))
+    intent_router_medium_threshold: float = float(os.getenv("INTENT_ROUTER_MEDIUM_THRESHOLD", "0.5"))
+    intent_router_session_ttl: int = int(os.getenv("INTENT_ROUTER_SESSION_TTL", "300"))
+
+    # STT Provider Configuration
+    stt_provider: str = os.getenv("STT_PROVIDER", "faster_whisper")  # "faster_whisper" | "omniasr" | "azure"
+    omniasr_url: str = os.getenv("OMNIASR_URL", "http://52.66.116.220:8080")
+    omniasr_model_name: str = os.getenv("OMNIASR_MODEL_NAME", "omniasr-amh")
+    omniasr_api_key: Optional[str] = os.getenv("OMNIASR_API_KEY")
 
     # Cosdata Configuration
     cosdata_endpoint_url: Optional[str] = os.getenv("COSDATA_ENDPOINT_URL")

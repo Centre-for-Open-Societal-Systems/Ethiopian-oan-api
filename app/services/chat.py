@@ -18,6 +18,8 @@ from agents.deps import FarmerContext
 from helpers.utils import get_logger, get_prompt, get_today_date_str
 from pydantic_ai import UsageLimits
 from app.services.fast_gemini import FastGeminiService, FastModerationService
+from app.services.intent_router import intent_router
+from app.config import settings
 from helpers.telemetry import create_question_event, create_error_event, TelemetryRequest
 from app.tasks.telemetry import send_telemetry
 from helpers.langfuse_client import span_context, update_current_trace
@@ -129,6 +131,78 @@ async def _stream_chat_messages_impl(
             logger.info(f"⏱️ [TIMING] Pre-moderation (failed): {moderation_time:.2f}ms")
     else:
         logger.info(f"⏱️ [TIMING] Pre-moderation: DISABLED (0ms)")
+
+    # ⏱️ STAGE 2.5: Intent Router (fast path)
+    if settings.enable_intent_router:
+        from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart, TextPart
+        stage_start = time.perf_counter()
+        try:
+            with span_context(
+                "chat.intent_router",
+                input={"query": query, "lang": target_lang},
+                metadata={"session_id": session_id},
+            ):
+                fast_result = await intent_router.route(
+                    query=query, lang=target_lang, session_id=session_id,
+                )
+        except Exception as e:
+            logger.error(f"Intent router error (falling through to LLM): {e}")
+            fast_result = None
+
+        router_time = (time.perf_counter() - stage_start) * 1000
+        logger.info(
+            f"⏱️ [TIMING] Intent router: {router_time:.2f}ms "
+            f"(matched={getattr(fast_result, 'matched', False)}, "
+            f"intent={getattr(fast_result, 'intent', None)}, "
+            f"decision={getattr(fast_result, 'decision', None)})"
+        )
+
+        if fast_result and fast_result.matched:
+            fast_response = fast_result.response
+
+            new_messages = [
+                ModelRequest(parts=[UserPromptPart(content=query)]),
+                ModelResponse(parts=[TextPart(content=fast_response)]),
+            ]
+            try:
+                await update_message_history(session_id, [*history, *new_messages])
+            except Exception as e:
+                logger.error(f"Fast-path history update failed: {e}")
+
+            try:
+                event = create_question_event(
+                    question_text=query,
+                    answer_text=fast_response,
+                    session_id=session_id,
+                    uid=user_id,
+                )
+                telemetry_data = TelemetryRequest(events=[event]).model_dump()
+                asyncio.create_task(send_telemetry(telemetry_data))
+            except Exception as e:
+                logger.error(f"Fast-path telemetry event creation failed: {e}")
+
+            e2e_total = (time.perf_counter() - pipeline_start) * 1000
+            logger.info(
+                f"⚡ FAST PATH: intent={fast_result.intent}, "
+                f"decision={fast_result.decision}, followup={fast_result.followup}, "
+                f"latency={e2e_total:.2f}ms"
+            )
+
+            response_data = {
+                "response": fast_response,
+                "status": "success",
+                "sources": fast_result.sources,
+                "metrics": {
+                    "path": "fast",
+                    "intent": fast_result.intent,
+                    "decision": fast_result.decision,
+                    "followup": fast_result.followup,
+                    "router_time": round(router_time, 2),
+                    "total_e2e_latency": round(e2e_total, 2),
+                },
+            }
+            yield json.dumps(response_data)
+            return
 
     # ⏱️ STAGE 3: History trimming
     stage_start = time.perf_counter()

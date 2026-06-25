@@ -93,7 +93,17 @@ def get_cosdata_client():
             "Install it with: pip install cosdata-client"
         )
 
-    endpoint_url = os.getenv('COSDATA_ENDPOINT_URL', 'http://127.0.0.1:8443')
+    # Prefer COSDATA_HOST/COSDATA_HTTP_PORT — docker-compose sets these per-service so
+    # the app reaches Cosdata over the Docker network (e.g. http://cosdata:8443). Fall
+    # back to COSDATA_ENDPOINT_URL for host-local runs that reach Cosdata via the
+    # published 127.0.0.1 port. (Inside the container 127.0.0.1 is the app's own
+    # loopback, so the old default refused the connection.)
+    host = os.getenv('COSDATA_HOST')
+    if host:
+        port = os.getenv('COSDATA_HTTP_PORT', '8443')
+        endpoint_url = f"http://{host}:{port}"
+    else:
+        endpoint_url = os.getenv('COSDATA_ENDPOINT_URL', 'http://127.0.0.1:8443')
     username = os.getenv('COSDATA_USERNAME', 'admin')
     password = os.getenv('COSDATA_PASSWORD', 'admin')
 

@@ -11,6 +11,7 @@ class ChatRequest(BaseModel):
 class TranscribeRequest(BaseModel):
     audio_content: str = Field(..., description="Base64 encoded audio content")
     session_id: Optional[str] = Field(None, description="Session ID")
+    lang_code: Optional[str] = Field(None, description="Language hint (e.g. 'en', 'am', 'en-US', 'am-ET')")
 
 class SuggestionsRequest(BaseModel):
     session_id: str = Field(..., description="Session ID to get suggestions for")
@@ -20,3 +21,6 @@ class TTSRequest(BaseModel):
     text: str = Field(..., description="Text to convert to speech")
     lang_code: str = Field('mr', description="Language code for TTS")
     session_id: Optional[str] = Field(None, description="Session ID")
+    voice_id: Optional[str] = Field(None, description="UI-side voice identifier (e.g. 'en-mms', 'am-piper-5')")
+    model: Optional[str] = Field(None, description="Triton model name to route to (e.g. 'mms-tts-eng', 'piper-am')")
+    speaker_id: Optional[int] = Field(None, description="Speaker ID for multi-speaker models (Piper)")

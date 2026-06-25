@@ -1,0 +1,9 @@
+{% if missing == "crop" %}
+Which crop would you like the price for? For example: Teff, Wheat, Barley, Maize.
+{% elif missing == "livestock" %}
+Which livestock would you like the price for? For example: Cattle, Goat, Sheep, Camel.
+{% elif missing == "marketplace" %}
+Which marketplace are you interested in? Please tell me the market name (e.g., Adama, Merkato, Bishoftu).
+{% else %}
+Could you provide more details so I can find the price?
+{% endif %}

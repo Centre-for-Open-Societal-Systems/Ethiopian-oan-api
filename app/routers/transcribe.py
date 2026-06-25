@@ -27,17 +27,18 @@ async def transcribe(request: TranscribeRequest):
 
     try:
         provider = get_transcription_provider()
-        transcription = await provider.transcribe(request.audio_content)
+        lang_hint = (request.lang_code or "en").strip() or "en"
+        transcription = await provider.transcribe(request.audio_content, lang_hint)
         logger.info(f"Transcription: {pii_masker.mask(transcription)}")
         update_current_observation(
             output=transcription,
-            metadata={"provider": type(provider).__name__},
+            metadata={"provider": type(provider).__name__, "lang_code": lang_hint},
         )
 
         return TranscribeResponse(
             status='success',
             text=transcription,
-            lang_code='en',
+            lang_code=lang_hint,
             session_id=request.session_id or str(uuid.uuid4())
         )
     except Exception as e:

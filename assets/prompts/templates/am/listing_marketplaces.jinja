@@ -1,0 +1,11 @@
+{% if region %}
+በ{{ region }} የሚገኙ ገበያዎች፦
+{% else %}
+ንቁ ገበያዎች፦
+{% endif %}
+
+{% for item in items %}
+* {{ item.am }}{% if item.en and item.en != item.am %} ({{ item.en }}){% endif %}{% if item.region %} — {{ item.region }}{% endif %} [{{ item.type }}]
+{% endfor %}
+
+ምንጭ፦ https://nmis.et/

@@ -27,11 +27,11 @@ try:
     from pipecat.transports.websocket.fastapi import FastAPIWebsocketTransport, FastAPIWebsocketParams
 except ImportError:
     from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketTransport, FastAPIWebsocketParams
-from pipecat.services.ai_services import LLMService
+from pipecat.services.llm_service import LLMService
 from pipecat.frames.frames import (
     Frame, TextFrame, AudioRawFrame, InputAudioRawFrame, TTSAudioRawFrame, 
-    StartInterruptionFrame, LLMFullResponseEndFrame, EndFrame, StartFrame, 
-    CancelFrame, LLMMessagesFrame, UserStoppedSpeakingFrame, 
+    InterruptionFrame, LLMFullResponseEndFrame, EndFrame, StartFrame,
+    CancelFrame, UserStoppedSpeakingFrame,
     UserStartedSpeakingFrame, TranscriptionFrame, InterimTranscriptionFrame
 )
 from pipecat.transports.base_transport import BaseTransport, TransportParams
@@ -682,7 +682,7 @@ class RawFastAPIWebsocketOutputTransport(BaseOutputTransport):
         self._text_buffer = []
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
-        if isinstance(frame, (StartFrame, EndFrame, CancelFrame, StartInterruptionFrame)):
+        if isinstance(frame, (StartFrame, EndFrame, CancelFrame, InterruptionFrame)):
              await super().process_frame(frame, direction)
              return
 

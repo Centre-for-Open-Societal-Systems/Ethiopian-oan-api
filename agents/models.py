@@ -30,8 +30,16 @@ elif LLM_PROVIDER == 'openrouter':
             api_key=os.getenv('OPENROUTER_API_KEY'),
         ),
     )
+elif LLM_PROVIDER == 'vllm':
+    LLM_MODEL = OpenAIModel(
+        LLM_MODEL_NAME,
+        provider=OpenAIProvider(
+            base_url=os.getenv('TRITON_LLM_URL'),
+            api_key=os.getenv('TRITON_LLM_API_KEY'),
+        ),
+    )
 else:
     raise ValueError(
         f"Invalid LLM_PROVIDER: {LLM_PROVIDER}. "
-        f"Must be one of: 'ollama', 'openrouter'"
+        f"Must be one of: 'ollama', 'openrouter', 'vllm'"
     )

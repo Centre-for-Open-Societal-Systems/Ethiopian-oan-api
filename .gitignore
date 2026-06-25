@@ -1,3 +1,6 @@
+# Local planning / memory notes
+.plan/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -187,3 +190,6 @@ cython_debug/
 .doc/
 .claude
 .vscode
+ONBOARDING.md
+.deepeval/
+results/

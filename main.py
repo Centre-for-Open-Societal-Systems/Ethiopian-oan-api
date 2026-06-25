@@ -61,12 +61,20 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"⚠️ Telemetry DB pool init failed: {e}")
 
+    # Warm intent router cache (loads crops/livestock/marketplaces from DB)
+    if settings.enable_intent_router:
+        try:
+            from app.services.intent_router.cache import intent_cache
+            await intent_cache.warmup()
+            logger.info("✅ Intent router cache warmed")
+        except Exception as e:
+            logger.warning(f"⚠️ Intent router cache warmup failed: {e}")
+
     # Pre-load TTS models to avoid first-request memory/latency spike
     try:
         from app.services.providers.tts import get_tts_provider
         tts = get_tts_provider()
-        await tts._load_model("en")
-        await tts._load_model("am")
+        await tts.preload(["en", "am"])
         logger.info("✅ TTS models pre-loaded (en, am)")
     except Exception as e:
         logger.warning(f"⚠️ TTS pre-load failed (will load on first request): {e}")

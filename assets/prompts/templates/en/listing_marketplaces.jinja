@@ -1,0 +1,11 @@
+{% if region %}
+Marketplaces in {{ region }}:
+{% else %}
+Active marketplaces:
+{% endif %}
+
+{% for item in items %}
+* {{ item.en }}{% if item.am and item.am != item.en %} ({{ item.am }}){% endif %}{% if item.region %} — {{ item.region }}{% endif %} [{{ item.type }}]
+{% endfor %}
+
+Source: https://nmis.et/

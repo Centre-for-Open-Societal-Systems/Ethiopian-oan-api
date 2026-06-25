@@ -1,0 +1,7 @@
+Crops available in {{ marketplace }}:
+
+{% for item in items %}
+* {{ item.en }}{% if item.am and item.am != item.en %} ({{ item.am }}){% endif %}
+{% endfor %}
+
+Source: https://nmis.et/

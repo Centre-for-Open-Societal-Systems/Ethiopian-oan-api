@@ -5,6 +5,7 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Install system dependencies
+# espeak-ng is required by Piper TTS (Amharic phonemization for Selam/Dawit/Meron voices).
 RUN apt-get update && apt-get install -y \
     supervisor \
     gcc \
@@ -12,6 +13,8 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     curl \
     netcat-openbsd \
+    espeak-ng \
+    espeak-ng-data \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better Docker layer caching
@@ -35,9 +38,9 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 # Expose FastAPI port
 EXPOSE 8000
 
-# Copy entrypoint script
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
+# Copy entrypoint script outside /app so the volume mount doesn't overwrite it
+COPY docker-entrypoint.sh /entrypoint.sh
+RUN sed -i 's/\r//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Start with entrypoint script
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]

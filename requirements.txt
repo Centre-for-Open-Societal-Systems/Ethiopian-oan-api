@@ -60,6 +60,7 @@ torchaudio
 pipecat-ai[silero,rnnoise]
 onnxruntime
 pyrnnoise
+tritonclient[http]
 
 # Geocoding
 geopy
@@ -77,3 +78,7 @@ sympy
 scipy
 click
 charset-normalizer
+
+# Evaluation (DeepEval prompt-quality harness — tests/eval_prompt_quality.py)
+# NOTE: dev/eval-only dependency — exclude for production (heavy, not used at runtime).
+deepeval>=4.0.5

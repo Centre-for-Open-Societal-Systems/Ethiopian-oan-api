@@ -1,0 +1,7 @@
+በ{{ marketplace }} የሚገኙ ሰብሎች፦
+
+{% for item in items %}
+* {{ item.am }}{% if item.en and item.en != item.am %} ({{ item.en }}){% endif %}
+{% endfor %}
+
+ምንጭ፦ https://nmis.et/
