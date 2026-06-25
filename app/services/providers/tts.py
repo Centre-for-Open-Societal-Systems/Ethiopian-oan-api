@@ -1,14 +1,16 @@
 """
-Production-Ready TTS Provider
+Production-Ready TTS Provider — MMS-TTS (HuggingFace VITS)
+
+Env-configurable: swap models by changing TTS_MODEL_AM / TTS_MODEL_EN.
 """
 
-import time
-from typing import AsyncGenerator, Optional
-from app.config import settings
-from helpers.utils import get_logger
+import os
 import asyncio
+import struct
+from typing import AsyncGenerator, Optional
+from helpers.utils import get_logger
+from helpers.langfuse_client import observe, update_current_observation
 import re
-import azure.cognitiveservices.speech as speechsdk
 
 logger = get_logger(__name__)
 
@@ -16,11 +18,11 @@ logger = get_logger(__name__)
 def convert_numbers_to_words(text: str, lang: str) -> str:
     """
     Convert numbers in text to words for better TTS pronunciation.
-    
+
     Args:
         text: Text containing numbers
         lang: Language code ('en' or 'am')
-    
+
     Returns:
         Text with numbers converted to words
     """
@@ -29,12 +31,12 @@ def convert_numbers_to_words(text: str, lang: str) -> str:
         def num_to_words_en(n):
             if n == 0:
                 return 'zero'
-            
+
             ones = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
-            teens = ['ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 
+            teens = ['ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen',
                     'sixteen', 'seventeen', 'eighteen', 'nineteen']
             tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety']
-            
+
             if n < 10:
                 return ones[n]
             elif n < 20:
@@ -47,7 +49,7 @@ def convert_numbers_to_words(text: str, lang: str) -> str:
                 return num_to_words_en(n // 1000) + ' thousand' + ('' if n % 1000 == 0 else ' ' + num_to_words_en(n % 1000))
             else:
                 return str(n)  # Fallback for very large numbers
-        
+
         # Replace numbers with words
         def replace_num(match):
             num_str = match.group(0).replace(',', '')
@@ -56,18 +58,18 @@ def convert_numbers_to_words(text: str, lang: str) -> str:
                 return num_to_words_en(num)
             except:
                 return match.group(0)
-        
+
         text = re.sub(r'\b\d{1,3}(?:,\d{3})*\b', replace_num, text)
-        
+
     elif lang == 'am':
         # Amharic number conversion
         def num_to_words_am(n):
             if n == 0:
                 return 'ዜሮ'
-            
+
             ones = ['', 'አንድ', 'ሁለት', 'ሦስት', 'አራት', 'አምስት', 'ስድስት', 'ሰባት', 'ስምንት', 'ዘጠኝ']
             tens = ['', 'አስር', 'ሃያ', 'ሰላሳ', 'አርባ', 'ሃምሳ', 'ስልሳ', 'ሰባ', 'ሰማንያ', 'ዘጠና']
-            
+
             if n < 10:
                 return ones[n]
             elif n == 10:
@@ -82,7 +84,7 @@ def convert_numbers_to_words(text: str, lang: str) -> str:
                 return num_to_words_am(n // 1000) + ' ሺህ' + ('' if n % 1000 == 0 else ' ' + num_to_words_am(n % 1000))
             else:
                 return str(n)  # Fallback
-        
+
         # Replace numbers with Amharic words
         def replace_num(match):
             num_str = match.group(0).replace(',', '')
@@ -91,9 +93,9 @@ def convert_numbers_to_words(text: str, lang: str) -> str:
                 return num_to_words_am(num)
             except:
                 return match.group(0)
-        
+
         text = re.sub(r'\b\d{1,3}(?:,\d{3})*\b', replace_num, text)
-    
+
     return text
 
 
@@ -108,262 +110,175 @@ class TTSProvider:
         raise NotImplementedError
 
 
-class AzureTTSProvider(TTSProvider):
-    """
-    Azure TTS Provider with proper resource management
+class MMSTTSProvider(TTSProvider):
+    """TTS using facebook/mms-tts VITS models (local inference via HuggingFace transformers).
+
+    Fully env-configurable: change TTS_MODEL_AM / TTS_MODEL_EN to swap models.
     """
 
     def __init__(self):
-        self.speech_key = settings.azure_foundary_api_key
-        self.service_region = settings.azure_foundary_region
-
-        # Voice configuration
-        self.voices = {
-            "am": "am-ET-MekdesNeural",
-            "en": "en-US-CoraMultilingualNeural"
+        self.model_map = {
+            "am": os.getenv("TTS_MODEL_AM", "facebook/mms-tts-amh"),
+            "en": os.getenv("TTS_MODEL_EN", "facebook/mms-tts-eng"),
         }
+        self.native_sample_rate = int(os.getenv("TTS_SAMPLE_RATE", "16000"))
+        self.target_sample_rate = 24000  # pipeline standard
+        self.device = os.getenv("TTS_DEVICE", "cpu")
 
-        logger.info(f"Initializing Azure TTS in region: {self.service_region}")
+        self._models = {}       # lang -> VitsModel
+        self._tokenizers = {}   # lang -> AutoTokenizer
+        self._resamplers = {}   # (native, target) -> Resample transform
+        self._lock = asyncio.Lock()
 
-        try:
-            # Create speech config (reused)
-            self.speech_config = speechsdk.SpeechConfig(
-                subscription=self.speech_key,
-                region=self.service_region
+        logger.info(
+            f"MMSTTSProvider initialized: models={self.model_map}, "
+            f"native_sr={self.native_sample_rate}, target_sr={self.target_sample_rate}, "
+            f"device={self.device}"
+        )
+
+    async def _load_model(self, lang: str):
+        """Lazy-load model + tokenizer for a language. Thread-safe via asyncio.Lock."""
+        if lang in self._models:
+            return
+
+        async with self._lock:
+            # Double-check after acquiring lock
+            if lang in self._models:
+                return
+
+            model_id = self.model_map.get(lang)
+            if not model_id:
+                raise ValueError(f"No TTS model configured for language '{lang}'. "
+                                 f"Set TTS_MODEL_{lang.upper()} env var.")
+
+            logger.info(f"Loading TTS model for '{lang}': {model_id} (first call — may download ~300-500MB)...")
+
+            import torch
+            from transformers import VitsModel, AutoTokenizer
+
+            loop = asyncio.get_event_loop()
+
+            # Load in executor to avoid blocking the event loop
+            def _load():
+                tokenizer = AutoTokenizer.from_pretrained(model_id)
+                model = VitsModel.from_pretrained(model_id).to(self.device)
+                model.eval()
+                return model, tokenizer
+
+            model, tokenizer = await loop.run_in_executor(None, _load)
+            self._models[lang] = model
+            self._tokenizers[lang] = tokenizer
+            logger.info(f"TTS model loaded for '{lang}': {model_id} on {self.device}")
+
+    def _get_resampler(self):
+        """Get or create a resampler from native to target sample rate."""
+        key = (self.native_sample_rate, self.target_sample_rate)
+        if key not in self._resamplers:
+            import torchaudio
+            self._resamplers[key] = torchaudio.transforms.Resample(
+                orig_freq=self.native_sample_rate,
+                new_freq=self.target_sample_rate,
             )
+        return self._resamplers[key]
 
-            # Set output format to raw PCM for streaming
-            self.speech_config.set_speech_synthesis_output_format(
-                speechsdk.SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm
-            )
+    def _synthesize_sync(self, text: str, lang: str) -> bytes:
+        """Synchronous synthesis: text -> 24kHz int16 PCM bytes."""
+        import torch
+        import numpy as np
 
-            # Performance optimizations
-            self.speech_config.set_property(
-                speechsdk.properties.PropertyId.SpeechServiceResponse_SynthesisConnectionLatencyMs,
-                "10000"  # Increased from 5000 to 10000ms for better reliability
-            )
+        text = convert_numbers_to_words(text.strip(), lang)
+        if not text:
+            return b""
 
-            self._synthesizers = {}
-            self._synthesizer_locks = {}
+        model = self._models[lang]
+        tokenizer = self._tokenizers[lang]
 
-            logger.info("✅ Azure TTS initialized successfully")
+        inputs = tokenizer(text, return_tensors="pt").to(self.device)
 
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize Azure TTS: {e}")
-            raise
+        with torch.no_grad():
+            output = model(**inputs)
 
-    def _get_or_create_synthesizer(self, lang: str) -> speechsdk.SpeechSynthesizer:
-        """
-        Get or create synthesizer for language
-        Reuses synthesizers instead of creating new ones
+        waveform = output.waveform[0]  # shape: (samples,)
 
-        Args:
-            lang: Language code
+        # Resample 16kHz -> 24kHz if needed
+        if self.native_sample_rate != self.target_sample_rate:
+            resampler = self._get_resampler()
+            waveform = resampler(waveform.unsqueeze(0)).squeeze(0)
 
-        Returns:
-            SpeechSynthesizer instance
-        """
-        if lang not in self._synthesizers:
-            # Select voice based on language
-            voice_name = self.voices.get(lang, self.voices["en"])
-            self.speech_config.speech_synthesis_voice_name = voice_name
+        # float32 -> int16 PCM bytes
+        audio_np = waveform.cpu().numpy()
+        audio_np = np.clip(audio_np, -1.0, 1.0)
+        audio_int16 = (audio_np * 32767).astype(np.int16)
+        return audio_int16.tobytes()
 
-            # Create new synthesizer
-            synthesizer = speechsdk.SpeechSynthesizer(
-                speech_config=self.speech_config,
-                audio_config=None
-            )
+    @observe(name="tts.mms", as_type="generation")
+    async def _synthesize(self, text: str, lang: str) -> bytes:
+        """Async synthesis: ensures model is loaded, then runs inference in executor."""
+        await self._load_model(lang)
+        update_current_observation(
+            input=text,
+            metadata={"provider": "mms_tts", "lang": lang, "model": self.model_map.get(lang)},
+        )
+        loop = asyncio.get_event_loop()
+        pcm = await loop.run_in_executor(None, self._synthesize_sync, text, lang)
+        update_current_observation(metadata={"pcm_bytes": len(pcm)})
+        return pcm
 
-            self._synthesizers[lang] = synthesizer
-            self._synthesizer_locks[lang] = asyncio.Lock()
-
-            logger.info(f"Created synthesizer for language: {lang} (voice: {voice_name})")
-
-        return self._synthesizers[lang]
+    async def _synthesize_chunk(self, text: str, lang: str) -> bytes:
+        """Async wrapper for pipeline.py compatibility (lines 1017, 1191)."""
+        return await self._synthesize(text, lang)
 
     async def stream_audio(
         self,
         text_stream: AsyncGenerator[str, None],
         lang: str = "en"
     ) -> AsyncGenerator[bytes, None]:
-        """
-        Stream audio bytes from text stream
+        """Buffer sentences from text_stream, synthesize each, yield 4096-byte PCM chunks."""
+        lang_code = "en" if lang.startswith("en") else "am"
+        await self._load_model(lang_code)
 
-        Args:
-            text_stream: Async generator of text chunks
-            lang: Language code
-
-        Yields:
-            bytes: Audio data chunks
-        """
         buffer = ""
-        # Sentence delimiters for natural speech breaks
-        # Include comma for earlier synthesis on short responses
         delimiters = {".", "!", "?", ";", "\n", ","}
-        
-        # Track timing for debugging
-        first_chunk_time = None
-        first_audio_time = None
-        chunk_count = 0
+        chunk_size = 4096
 
-        try:
-            async for text_chunk in text_stream:
-                if not text_chunk:
-                    continue
-                
-                chunk_count += 1
-                if first_chunk_time is None:
-                    first_chunk_time = time.time()
-                    logger.debug(f"TTS received first text chunk: '{text_chunk[:30]}...'")
+        async def yield_pcm(text: str):
+            pcm = await self._synthesize(text, lang_code)
+            if not pcm:
+                return
+            offset = 0
+            while offset < len(pcm):
+                yield pcm[offset:offset + chunk_size]
+                offset += chunk_size
 
-                buffer += text_chunk
-
-                # Check if we have a complete sentence-like chunk
-                should_synthesize = False
-                to_synthesize = ""
-
-                # Look for sentence boundaries
-                if any(char in delimiters for char in text_chunk):
-                    # Find the last delimiter to split safely
-                    split_idx = -1
-                    for i in range(len(buffer) - 1, -1, -1):
-                        if buffer[i] in delimiters:
-                            split_idx = i
-                            break
-
-                    if split_idx != -1:
-                        to_synthesize = buffer[:split_idx + 1].strip()
-                        buffer = buffer[split_idx + 1:].strip()
-                        should_synthesize = True
-
-                # Force synthesis if buffer reaches threshold (reduced from 150 for faster response)
-                elif len(buffer) > 80:
-                    to_synthesize = buffer.strip()
-                    buffer = ""
-                    should_synthesize = True
-                
-                # OPTIMIZATION: If this is the first chunk and it's substantial (>30 chars),
-                # synthesize immediately to start audio playback faster
-                elif chunk_count == 1 and len(buffer) > 30:
-                    to_synthesize = buffer.strip()
-                    buffer = ""
-                    should_synthesize = True
-                    logger.info(f"TTS early synthesis on first chunk ({len(to_synthesize)} chars)")
-
-                if should_synthesize and to_synthesize:
-                    if first_audio_time is None:
-                        first_audio_time = time.time()
-                        if first_chunk_time:
-                            logger.info(f"TTS starting synthesis {first_audio_time - first_chunk_time:.3f}s after first text chunk")
-                    audio_bytes = await self._synthesize_chunk(to_synthesize, lang)
-                    if audio_bytes:
-                        yield audio_bytes
-
-            # Process remaining buffer
-            if buffer.strip():
-                audio_bytes = await self._synthesize_chunk(buffer.strip(), lang)
-                if audio_bytes:
+        async for text_chunk in text_stream:
+            if not text_chunk:
+                continue
+            buffer += text_chunk
+            if any(c in delimiters for c in text_chunk):
+                split_idx = max((i for i, c in enumerate(buffer) if c in delimiters), default=-1)
+                if split_idx != -1:
+                    to_synth = buffer[:split_idx + 1].strip()
+                    buffer = buffer[split_idx + 1:].strip()
+                    if to_synth:
+                        async for audio_bytes in yield_pcm(to_synth):
+                            yield audio_bytes
+            elif len(buffer) > 80:
+                async for audio_bytes in yield_pcm(buffer):
                     yield audio_bytes
+                buffer = ""
 
-        except asyncio.CancelledError:
-            logger.debug("TTS stream cancelled")
-            raise
-        except Exception as e:
-            logger.error(f"TTS streaming error: {e}", exc_info=True)
-            raise
-
-    async def _synthesize_chunk(self, text: str, lang: str) -> Optional[bytes]:
-        """
-        Synthesize a single text chunk to audio bytes
-
-        Args:
-            text: Text to synthesize
-            lang: Language code
-
-        Returns:
-            Optional[bytes]: Audio data or None on error
-        """
-        if not text or not text.strip():
-            return None
-
-        try:
-            # Convert numbers to words for better TTS pronunciation
-            text_for_tts = convert_numbers_to_words(text, lang)
-            if text_for_tts != text:
-                logger.debug(f"Converted numbers: '{text[:50]}...' -> '{text_for_tts[:50]}...'")
-            
-            synthesizer = self._get_or_create_synthesizer(lang)
-            lock = self._synthesizer_locks[lang]
-
-            # Use lock to prevent concurrent synthesis with same synthesizer
-            async with lock:
-                # Run synthesis in executor to avoid blocking
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    None,
-                    lambda: synthesizer.speak_text_async(text_for_tts).get()
-                )
-
-            # Check result
-            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                logger.debug(f"Synthesized: {text[:50]}...")
-                # Return the audio data bytes
-                return bytes(result.audio_data)
-
-            elif result.reason == speechsdk.ResultReason.Canceled:
-                cancellation_details = result.cancellation_details
-                logger.error(f"Speech synthesis canceled: {cancellation_details.reason}")
-
-                if cancellation_details.reason == speechsdk.CancellationReason.Error:
-                    error_msg = cancellation_details.error_details
-                    logger.error(f"Error details: {error_msg}")
-
-                    # If codec or connection error, recreate synthesizer
-                    if any(keyword in error_msg.lower() for keyword in ["codec", "authentication", "connection", "timeout"]):
-                        logger.warning(f"Recreating synthesizer for {lang} due to error: {error_msg}")
-                        if lang in self._synthesizers:
-                            try:
-                                del self._synthesizers[lang]
-                                del self._synthesizer_locks[lang]
-                            except:
-                                pass
-                        # Retry once with new synthesizer
-                        logger.info(f"Retrying synthesis with new synthesizer...")
-                        synthesizer = self._get_or_create_synthesizer(lang)
-                        lock = self._synthesizer_locks[lang]
-                        async with lock:
-                            loop = asyncio.get_event_loop()
-                            result = await loop.run_in_executor(
-                                None,
-                                lambda: synthesizer.speak_text_async(text).get()
-                            )
-                        if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                            logger.info("✅ Retry successful")
-                            return bytes(result.audio_data)
-                        else:
-                            logger.error(f"❌ Retry failed: {result.reason}")
-
-                return None
-
-            else:
-                logger.warning(f"Unexpected synthesis result: {result.reason}")
-                return None
-
-        except Exception as e:
-            logger.error(f"Azure TTS Synthesis error: {e}", exc_info=True)
-            return None
+        if buffer.strip():
+            async for audio_bytes in yield_pcm(buffer.strip()):
+                yield audio_bytes
 
     def cleanup(self):
-        """Cleanup all synthesizers"""
-        for lang, synthesizer in self._synthesizers.items():
-            try:
-                del synthesizer
-                logger.debug(f"Cleaned up synthesizer for {lang}")
-            except Exception as e:
-                logger.debug(f"Error cleaning up synthesizer for {lang}: {e}")
-
-        self._synthesizers.clear()
-        self._synthesizer_locks.clear()
+        """Free model memory."""
+        for lang, model in self._models.items():
+            del model
+        self._models.clear()
+        self._tokenizers.clear()
+        self._resamplers.clear()
+        logger.info("MMSTTSProvider: models cleaned up")
 
 
 # Singleton
@@ -371,11 +286,11 @@ _tts_provider: Optional[TTSProvider] = None
 
 
 def get_tts_provider() -> TTSProvider:
-    """Get TTS provider based on configuration"""
+    """Get the MMS-TTS provider (singleton)."""
     global _tts_provider
     if _tts_provider is None:
-        _tts_provider = AzureTTSProvider()
-        logger.info("TTS Provider initialized")
+        _tts_provider = MMSTTSProvider()
+        logger.info("TTS Provider initialized: mms_tts")
 
     return _tts_provider
 

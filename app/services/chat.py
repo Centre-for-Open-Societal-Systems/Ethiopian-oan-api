@@ -1,9 +1,11 @@
 from typing import AsyncGenerator
+import asyncio
 import json
 import time
 import os
 from agents.agrinet import agrinet_agent
 from app.services.moderation_classifier import moderation_classifier
+from app.services.pii_masker import pii_masker
 from helpers.utils import get_logger
 from app.utils import (
     update_message_history,
@@ -16,6 +18,9 @@ from agents.deps import FarmerContext
 from helpers.utils import get_logger, get_prompt, get_today_date_str
 from pydantic_ai import UsageLimits
 from app.services.fast_gemini import FastGeminiService, FastModerationService
+from helpers.telemetry import create_question_event, create_error_event, TelemetryRequest
+from app.tasks.telemetry import send_telemetry
+from helpers.langfuse_client import span_context, update_current_trace
 load_dotenv()
 
 logger = get_logger(__name__)
@@ -29,12 +34,41 @@ async def stream_chat_messages(
     history: list,
 ) -> AsyncGenerator[str, None]:
     """Async generator for streaming chat messages."""
+    with span_context(
+        "chat.stream",
+        input={"query": query, "source_lang": source_lang, "target_lang": target_lang},
+        metadata={"user_id": user_id, "session_id": session_id},
+    ):
+        update_current_trace(
+            name="chat",
+            user_id=user_id,
+            session_id=session_id,
+            input={"query": query, "source_lang": source_lang, "target_lang": target_lang},
+            tags=["chat", f"lang:{target_lang}"],
+        )
+        async for chunk in _stream_chat_messages_impl(
+            query, session_id, source_lang, target_lang, user_id, history
+        ):
+            yield chunk
+
+
+async def _stream_chat_messages_impl(
+    query: str,
+    session_id: str,
+    source_lang: str,
+    target_lang: str,
+    user_id: str,
+    history: list,
+) -> AsyncGenerator[str, None]:
     # ⏱️ START TIMING
     pipeline_start = time.perf_counter()
-    
+
     # Generate a unique content ID for this query
     content_id = f"query_{session_id}_{len(history)//2 + 1}"
-    
+
+    # Mask PII before it enters the pipeline
+    query = pii_masker.mask(query)
+
     # ⏱️ STAGE 1: Context preparation
     stage_start = time.perf_counter()
     deps = FarmerContext(
@@ -73,6 +107,16 @@ async def stream_chat_messages(
                         "reason": pre_mod_result.reason
                     }
                 }
+                try:
+                    event = create_error_event(
+                        error_text=f"Moderation blocked: {pre_mod_result.label} - {pre_mod_result.reason}",
+                        session_id=session_id,
+                        uid=user_id,
+                    )
+                    telemetry_data = TelemetryRequest(events=[event]).model_dump()
+                    asyncio.create_task(send_telemetry(telemetry_data))
+                except Exception as e:
+                    logger.error(f"Telemetry event creation failed: {e}")
                 yield json.dumps(response_data)
                 return
             
@@ -233,5 +277,18 @@ async def stream_chat_messages(
             
     except Exception as e:
         logger.error(f"Error generating metrics table: {e}")
+
+    # Fire telemetry for successful chat response
+    try:
+        event = create_question_event(
+            question_text=query,
+            answer_text=full_text,
+            session_id=session_id,
+            uid=user_id,
+        )
+        telemetry_data = TelemetryRequest(events=[event]).model_dump()
+        asyncio.create_task(send_telemetry(telemetry_data))
+    except Exception as e:
+        logger.error(f"Telemetry event creation failed: {e}")
 
     yield json.dumps(response_data)

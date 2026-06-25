@@ -66,20 +66,17 @@ class Settings(BaseSettings):
 
     # External Service URLs
     telemetry_api_url: str = "https://vistaar.kenpath.ai/observability-service/action/data/v3/telemetry"
+    telemetry_db_url: Optional[str] = os.getenv("TELEMETRY_DB_URL")
     bhashini_api_url: str = ""
     ollama_endpoint_url: Optional[str] = None
     marqo_endpoint_url: Optional[str] = None
-    inference_endpoint_url: Optional[str] = None
 
     # External Service API Keys
-    openai_api_key: Optional[str] = None
     sarvam_api_key: Optional[str] = None
     meity_api_key_value: Optional[str] = None
     logfire_token: Optional[str] = None
     bhashini_api_key: str = ""
     eleven_labs_api_key: str = ""
-    inference_api_key: Optional[str] = None
-    gemini_api_key: Optional[str] = None
     mapbox_api_token: Optional[str] = None
 
     # AWS Configuration
@@ -93,10 +90,6 @@ class Settings(BaseSettings):
     llm_model_name: Optional[str] = None
     marqo_index_name: Optional[str] = None
 
-    # Azure Configuration
-    azure_foundary_api_key: Optional[str] = None
-    azure_foundary_region: Optional[str] = None
-
     # RAG Configuration
     rag_provider: str = os.getenv("RAG_PROVIDER", "marqo")  # "marqo" or "cosdata"
 
@@ -107,6 +100,12 @@ class Settings(BaseSettings):
 
     # Embedding Configuration (for Cosdata - uses sentence-transformers locally)
     embedding_model_name: str = os.getenv("EMBEDDING_MODEL_NAME", "intfloat/multilingual-e5-large")
+
+    # Langfuse Observability
+    langfuse_enabled: bool = os.getenv("LANGFUSE_ENABLED", "true").lower() == "true"
+    langfuse_base_url: Optional[str] = os.getenv("LANGFUSE_BASE_URL") or os.getenv("LANGFUSE_HOST")
+    langfuse_public_key: Optional[str] = os.getenv("LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key: Optional[str] = os.getenv("LANGFUSE_SECRET_KEY")
 
     class Config:
         env_file = ".env"

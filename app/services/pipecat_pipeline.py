@@ -28,7 +28,6 @@ try:
 except ImportError:
     from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketTransport, FastAPIWebsocketParams
 from pipecat.services.ai_services import LLMService
-from pipecat.services.azure import AzureSTTService, AzureTTSService
 from pipecat.frames.frames import (
     Frame, TextFrame, AudioRawFrame, InputAudioRawFrame, TTSAudioRawFrame, 
     StartInterruptionFrame, LLMFullResponseEndFrame, EndFrame, StartFrame, 
@@ -49,87 +48,145 @@ from agents.agrinet import agrinet_agent, generation_agent
 from app.services.router import tool_router, ENABLE_OLLAMA_ROUTER
 from agents.deps import FarmerContext
 from app.utils import sanitize_history_for_generation
+from app.services.pii_masker import pii_masker
 
-class InstrumentedAzureSTTService(AzureSTTService):
-    def __init__(self, metrics: dict, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+class FasterWhisperSTTService(FrameProcessor):
+    """STT using faster-whisper-server. Buffers VAD-bounded audio segments, batch-transcribes."""
+
+    def __init__(self, metrics: dict, base_url: str = None, language: str = "en", sample_rate: int = 16000):
+        super().__init__()
         self.metrics = metrics
-        self._audio_frame_count = 0
-        logger.info(f"🔧 STT initialized (sample_rate={kwargs.get('sample_rate', 16000)})")
-        
-    async def start(self, frame):
-        await super().start(frame)
-        if hasattr(self, '_speech_recognizer') and self._speech_recognizer:
-            def on_canceled(evt):
-                logger.warning(f"❌ Azure STT - CANCELED: {evt.result.cancellation_details}")
-            self._speech_recognizer.canceled.connect(on_canceled)
-        else:
-            logger.warning("⚠️ STT: Speech recognizer not created!")
-        
-    async def process_frame(self, frame, direction):
-        if isinstance(frame, InputAudioRawFrame):
-            self._audio_frame_count += 1
-            # Start timing on first audio packet
+        self.base_url = (base_url or os.getenv("FASTER_WHISPER_URL", "http://localhost:8000")).rstrip('/')
+        self.language = language
+        self.sample_rate = sample_rate
+        self._audio_buffer: list = []
+        self._is_recording = False
+        logger.info(f"FasterWhisperSTTService: url={self.base_url}, lang={language}")
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, UserStartedSpeakingFrame):
+            self._is_recording = True
+            self._audio_buffer = []
             if 'asr_start' not in self.metrics:
                 self.metrics['asr_start'] = time.perf_counter()
-                
-        await super().process_frame(frame, direction)
-        
-    async def push_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
-        if isinstance(frame, TranscriptionFrame):
-            t = time.perf_counter()
-            self.metrics['asr_end'] = t
-            self.metrics['llm_start'] = t
-            logger.info(f"📝 STT: '{frame.text}'")
-            
-        await super().push_frame(frame, direction)
+            await self.push_frame(frame, direction)
 
-class InstrumentedAzureTTSService(AzureTTSService):
-    def __init__(self, metrics: dict, *args, **kwargs):
+        elif isinstance(frame, InputAudioRawFrame):
+            if self._is_recording:
+                self._audio_buffer.append(frame.audio)
+            await self.push_frame(frame, direction)
+
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            self._is_recording = False
+            audio_bytes = b''.join(self._audio_buffer)
+            self._audio_buffer = []
+
+            if audio_bytes:
+                text = await self._transcribe(audio_bytes)
+                t = time.perf_counter()
+                self.metrics['asr_end'] = t
+                self.metrics['llm_start'] = t
+                if text:
+                    logger.info(f"STT: '{text}'")
+                    # Push TextFrame BEFORE UserStoppedSpeakingFrame so AgriNetLLMService
+                    # has the text buffered before the wait timer starts
+                    await self.push_frame(TextFrame(text=text), direction)
+
+            await self.push_frame(frame, direction)
+
+        else:
+            await self.push_frame(frame, direction)
+
+    async def _transcribe(self, pcm_bytes: bytes) -> str:
+        """Wrap PCM in WAV, POST to faster-whisper server, return transcript."""
+        import httpx
+        import wave
+        import io
+        buf = io.BytesIO()
+        with wave.open(buf, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(self.sample_rate)
+            wf.writeframes(pcm_bytes)
+        wav_bytes = buf.getvalue()
+        whisper_lang = self.language.split("-")[0]  # "en-US" → "en"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{self.base_url}/v1/audio/transcriptions",
+                    files={"file": ("audio.wav", wav_bytes, "audio/wav")},
+                    data={"model": os.getenv("FASTER_WHISPER_MODEL", "Systran/faster-whisper-medium"),
+                          "language": whisper_lang}
+                )
+                resp.raise_for_status()
+                return resp.json().get("text", "").strip()
+        except Exception as e:
+            logger.error(f"faster-whisper error: {e}")
+            return ""
+
+
+class MMSTTSService(FrameProcessor):
+    """TTS using facebook/mms-tts VITS models (local inference). Streams audio as TTSAudioRawFrame."""
+
+    def __init__(self, metrics: dict, language: str = "en", sample_rate: int = 24000):
+        super().__init__()
         self.metrics = metrics
+        self.language = language
+        self.sample_rate = sample_rate  # pipeline standard: 24kHz
         self._audio_frame_count = 0
-        super().__init__(*args, **kwargs)
-        # CRITICAL: Override pause_frame_processing AFTER parent init
-        # AzureTTSService hardcodes this to True, but we need False for multi-turn
-        # Without this, TTS blocks after first response waiting for BotStoppedSpeakingFrame
-        self._pause_frame_processing = False
-        
-    async def process_frame(self, frame, direction):
-        if (isinstance(frame, TextFrame) or hasattr(frame, 'text')) and not isinstance(frame, TranscriptionFrame):
+
+        from app.services.providers.tts import get_tts_provider
+        self._provider = get_tts_provider()
+        logger.info(f"MMSTTSService: lang={language}, sample_rate={sample_rate}")
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, TextFrame) and not isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
             if 'tts_start' not in self.metrics:
                 self.metrics['tts_start'] = time.perf_counter()
-                text_preview = getattr(frame, 'text', 'NoText')[:30]
-                logger.info(f"🐛 TTS START: '{text_preview}' at {self.metrics['tts_start']}")
-        
-        await super().process_frame(frame, direction)
+                logger.info(f"TTS START: '{frame.text[:30]}'")
+            await self._synthesize_and_push(frame.text, direction)
 
-        if isinstance(frame, LLMFullResponseEndFrame):
-             self.metrics['tts_end'] = time.perf_counter()
-             logger.info(f"🔊 TTS: Complete ({self._audio_frame_count} audio frames)")
-             self._audio_frame_count = 0
-             
-             # Calculate and log metrics, and get the dict to send to client
-             metrics_data = self.log_metrics()
-             
-             # Send metrics to frontend/client via JSON frame
-             if metrics_data:
-                 await self.push_frame(JSONMessageFrame(message={
-                     "type": "metrics", 
-                     "data": metrics_data
-                 }))
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            self.metrics['tts_end'] = time.perf_counter()
+            logger.info(f"TTS: Complete ({self._audio_frame_count} frames)")
+            self._audio_frame_count = 0
+            metrics_data = self.log_metrics()
+            if metrics_data:
+                await self.push_frame(JSONMessageFrame(message={"type": "metrics", "data": metrics_data}))
+            await self.push_frame(frame, direction)
 
-    async def push_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
-        if isinstance(frame, TTSAudioRawFrame):
-            self._audio_frame_count += 1
-            if 'tts_first_audio' not in self.metrics:
-                now = time.perf_counter()
-                self.metrics['tts_first_audio'] = now
-                logger.info(f"🔊 TTS: First audio frame produced ({len(frame.audio)} bytes) at {now}")
-                if 'tts_start' in self.metrics:
-                    delta = (now - self.metrics['tts_start']) * 1000
-                    logger.info(f"🐛 TTS Latency Debug: {delta:.2f}ms")
-        
-        await super().push_frame(frame, direction)
+        else:
+            await self.push_frame(frame, direction)
+
+    async def _synthesize_and_push(self, text: str, direction: FrameDirection):
+        text = text.strip()
+        if not text:
+            return
+        try:
+            lang_code = "en" if self.language.startswith("en") else "am"
+            pcm_bytes = await self._provider._synthesize(text, lang_code)
+            if not pcm_bytes:
+                return
+
+            chunk_size = 4096
+            offset = 0
+            while offset < len(pcm_bytes):
+                pcm_chunk = pcm_bytes[offset:offset + chunk_size]
+                offset += chunk_size
+
+                if 'tts_first_audio' not in self.metrics:
+                    self.metrics['tts_first_audio'] = time.perf_counter()
+                self._audio_frame_count += 1
+                await self.push_frame(
+                    TTSAudioRawFrame(audio=pcm_chunk, sample_rate=self.sample_rate, num_channels=1),
+                    direction
+                )
+        except Exception as e:
+            logger.error(f"MMS-TTS synthesis error: {e}")
 
     def log_metrics(self):
         m = self.metrics
@@ -359,9 +416,9 @@ class AgriNetLLMService(FrameProcessor):
             # Capture Buffer Wait Time
             self.metrics['buffer_start'] = time.perf_counter()
             
-            # Wait 3.0s for Cloud STT latency (logs show ~2s delay)
-            logger.info("⏳ AgriNet: Waiting 3.0s for final text...")
-            await asyncio.sleep(3.0)
+            # Wait 0.3s — faster-whisper sends text before UserStoppedSpeakingFrame arrives
+            logger.info("⏳ AgriNet: Waiting 0.3s for final text...")
+            await asyncio.sleep(0.3)
             
             self.metrics['buffer_end'] = time.perf_counter()
             
@@ -372,6 +429,9 @@ class AgriNetLLMService(FrameProcessor):
 
             # Clear buffer immediately after picking it up to avoid re-processing
             self._text_buffer = ""
+
+            # Mask PII before it enters logs, history, moderation, and LLM
+            user_text = pii_masker.mask(user_text)
 
             logger.info(f"🚀 AgriNet: Proceeding with query: '{user_text}'")
             
@@ -405,7 +465,7 @@ class AgriNetLLMService(FrameProcessor):
                 return
             
             # Generate
-            model_name = os.getenv("LLM_MODEL_NAME", "gemini-2.0-flash-exp")
+            model_name = os.getenv("LLM_MODEL_NAME", "qwen2.5:7b")
             logger.info(f"🧠 Using LLM Model: {model_name}")
             fast_service = FastGeminiService(model=model_name, lang=self.context.lang_code)
             ai_full_text = ""
@@ -772,11 +832,7 @@ async def run_pipecat_pipeline(websocket: WebSocket, session_id: str, lang: str 
     )
 
     # 2. Services
-    azure_key = os.getenv("azure_foundary_api_key")
-    azure_region = os.getenv("azure_foundary_region")
 
-    logger.info(f"Azure STT initialized: region={azure_region}")
-    
     # Initialize metrics with required keys to prevent KeyErrors
     enable_mod = os.getenv("ENABLE_MODERATION", "false").lower().strip() == "true"
     metrics = {
@@ -784,25 +840,12 @@ async def run_pipecat_pipeline(websocket: WebSocket, session_id: str, lang: str 
         'mod_status': "Enabled" if enable_mod else "Disabled"
     }
 
-    # Use Instrumented service for metrics
-    stt = InstrumentedAzureSTTService(
-        metrics=metrics,
-        api_key=azure_key,
-        region=azure_region,
-        language="en-US" if lang == "en" else "am-ET",
-        sample_rate=16000
+    stt = FasterWhisperSTTService(
+        metrics=metrics, language=lang, sample_rate=16000
     )
-    
-    selected_voice = "en-US-AriaNeural" if lang == "en" else "am-ET-MekdesNeural"
-    
-    # Use Instrumented service for metrics
-    # NOTE: pause_frame_processing is set to False inside InstrumentedAzureTTSService.__init__
-    tts = InstrumentedAzureTTSService(
-        metrics=metrics,
-        api_key=azure_key,
-        region=azure_region,
-        voice=selected_voice,
-        sample_rate=16000
+
+    tts = MMSTTSService(
+        metrics=metrics, language=lang, sample_rate=24000
     )
 
     # LLM (with Buffer Logic)

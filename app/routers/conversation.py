@@ -1,4 +1,5 @@
 from fastapi import APIRouter, WebSocket
+import gc
 import uuid
 from app.services.pipecat_pipeline import run_pipecat_pipeline
 from helpers.utils import get_logger
@@ -27,8 +28,10 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Pipecat pipeline error: {e}")
         try:
-            # Check if open before closing? WebSocketState.CONNECTED
             await websocket.close()
         except Exception:
             pass
+    finally:
+        gc.collect()
+        logger.info(f"GC collected after session {session_id} disconnect")
 

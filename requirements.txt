@@ -24,11 +24,11 @@ asyncpg
 openai
 pydantic>=2.0.0
 pydantic-ai
-google-genai
 tiktoken
 tenacity
 transformers
 logfire
+langfuse>=3.0.0
 
 # Caching
 redis
@@ -50,10 +50,8 @@ marqo
 cosdata-client>=0.2.2
 sentence-transformers>=2.2.0
 
-# AWS & Azure
+# AWS
 boto3
-azure-cognitiveservices-speech
-azure-core
 
 # Audio & VAD
 soundfile

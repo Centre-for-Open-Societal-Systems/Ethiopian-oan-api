@@ -1,0 +1,112 @@
+name: Build OAN with Docker Compose
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/build.yml'
+
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/build.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+     
+      - name: Free disk space
+        run: |
+          echo "Disk before cleanup:"
+          df -h
+
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/hostedtoolcache
+
+          docker system prune -af || true
+
+          echo "Disk after cleanup:"
+          df -h
+
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 🔹 Create .env file
+      - name: Create .env file
+        run: |
+          cat <<EOF > .env
+          LLM_PROVIDER=${{ vars.LLM_PROVIDER }}
+          LLM_MODEL_NAME=${{ vars.LLM_MODEL_NAME }}
+          INFERENCE_ENDPOINT_URL=${{ vars.INFERENCE_ENDPOINT_URL }}
+          INFERENCE_API_KEY=${{ secrets.INFERENCE_API_KEY }}
+          MAPBOX_API_TOKEN=${{ secrets.MAPBOX_API_TOKEN }}
+          MARQO_ENDPOINT_URL=${{ vars.MARQO_ENDPOINT_URL }}
+          MARQO_INDEX_NAME=${{ vars.MARQO_INDEX_NAME }}
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          OPENWEATHERMAP_API_KEY=${{ secrets.OPENWEATHERMAP_API_KEY }}
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          DB_POOL_SIZE=${{ vars.DB_POOL_SIZE }}
+          DB_MAX_OVERFLOW=${{ vars.DB_MAX_OVERFLOW }}
+          SCRAPER_ENABLED=${{ vars.SCRAPER_ENABLED }}
+          azure_foundary_api_key=${{ secrets.azure_foundary_api_key }}
+          azure_foundary_region=${{ vars.azure_foundary_region }}
+          ENABLE_MODERATION=${{ vars.ENABLE_MODERATION }}
+          RAG_PROVIDER=${{ vars.RAG_PROVIDER }}
+          COSDATA_ENDPOINT_URL=${{ vars.COSDATA_ENDPOINT_URL }}
+          COSDATA_USERNAME=${{ secrets.COSDATA_USERNAME }}
+          COSDATA_PASSWORD=${{ secrets.COSDATA_PASSWORD }}
+          COSDATA_COLLECTION_NAME=${{ vars.COSDATA_COLLECTION_NAME }}
+          EMBEDDING_MODEL_NAME=${{ vars.EMBEDDING_MODEL_NAME }}
+          AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION=${{ vars.AWS_REGION }}
+          EOF
+
+      # 🔹 Clean previous containers
+      - name: Clean old containers
+        run: docker compose down -v || true
+
+   
+      - name: Build Docker images
+        env:
+          DOCKER_BUILDKIT: 1
+        run: docker compose build --progress=plain
+
+    
+      - name: Start containers
+        run: docker compose up -d
+
+ 
+      - name: Wait for required containers
+        run: |
+          REQUIRED=("oan_postgres" "oan_redis" "oan_nominatim")
+
+          for container in "${REQUIRED[@]}"; do
+            echo "Checking $container..."
+            for i in {1..30}; do
+              STATUS=$(docker inspect --format='{{.State.Health.Status}}' $container || echo "missing")
+              echo "$container status: $STATUS"
+              if [ "$STATUS" = "healthy" ]; then break; fi
+              sleep 5
+            done
+
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' $container || echo "missing")
+            if [ "$STATUS" != "healthy" ]; then
+              echo "$container is unhealthy ❌"
+              exit 1
+            fi
+          done
+
+      # 🔹 Show status
+      - name: Show running containers
+        run: docker ps

@@ -181,3 +181,9 @@ cython_debug/
 .pypirc
 .DS_Store
 .DS_Store
+
+# Plan/memory files
+.plan/
+.doc/
+.claude
+.vscode

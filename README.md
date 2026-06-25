@@ -1,6 +1,6 @@
 # OpenAgriNet AI API
 
-OpenAgriNet is part of Maharashtra's smart farming Digital Public Infrastructure (DPI) initiative. OAN powers MahaVistaar, an AI-driven agricultural assistant that brings expert farming knowledge to every farmer in simple language.
+OpenAgriNet is part of Maharashtra's smart farming Digital Public Infrastructure (DPI) initiative. OAN powers oan-api, an AI-driven agricultural assistant that brings expert farming knowledge to every farmer in simple language.
 
 For more information about OpenAgriNet, visit: https://openagrinet.global/
 
@@ -28,45 +28,61 @@ For more information about OpenAgriNet, visit: https://openagrinet.global/
 - APMC (Agricultural Produce Market Committee) market prices
 - Registered warehouse database
 
-## Docker Setup
+---
+
+## Getting Started
 
 ### Prerequisites
 
-- Docker installed on your system
-- Docker Compose installed on your system
+- [Ollama](https://ollama.ai) installed locally (for the LLM)
+- [Docker](https://docker.com) running (for all supporting services)
+- `conda activate protean` (Python environment with all dependencies)
 
-### Network Setup
+---
 
-Create a dedicated network:
+### Step 1 — Start Required Services
+
+**Create a shared Docker network (first time only):**
 ```bash
 docker network create oannetwork
 ```
 
-### Redis Setup
-
-Run Redis Stack:
+**Redis (session cache):**
 ```bash
 docker run -d --name redis-stack --network oannetwork \
     -p 6379:6379 -p 8001:8001 redis/redis-stack:latest
 ```
 
-### Nominatim Setup
-
-Quick setup:
-
-For detailed setup instructions, system requirements, and troubleshooting, see [docs/nominatim.md](docs/nominatim.md).
-
+**PostgreSQL (market data):**
 ```bash
-# Add Nominatim to your docker-compose.yml and start it
-docker-compose up nominatim -d
-
-# Monitor the import progress (takes 30-60+ minutes)
-docker-compose logs -f nominatim
+docker compose up postgres -d
 ```
 
-### Marqo Setup
+**Ollama (LLM):**
+```bash
+ollama serve
+ollama pull qwen2.5:7b   # first time only
+```
 
-Run Marqo search engine:
+**faster-whisper (voice STT):**
+```bash
+docker run -d -p 8000:8000 fedirz/faster-whisper-server:latest-cpu
+```
+
+**Coqui XTTS (voice TTS):**
+```bash
+docker run -d -p 8020:8020 daswer123/xtts-api-server
+```
+
+**Nominatim (geocoding, optional):**
+
+For detailed setup instructions, system requirements, and troubleshooting, see [docs/nominatim.md](docs/nominatim.md).
+```bash
+docker-compose up nominatim -d
+docker-compose logs -f nominatim   # monitor import (30-60+ min first time)
+```
+
+**Marqo (vector search, optional):**
 ```bash
 docker run --name marqo -p 8882:8882 \
     -e MARQO_MAX_CONCURRENT_SEARCH=50 \
@@ -74,9 +90,177 @@ docker run --name marqo -p 8882:8882 \
     marqoai/marqo:latest
 ```
 
-### Main Application
+---
 
-Start the application:
+### Step 2 — Configure `.env`
+
+Create or edit `.env` in the project root:
+
+```ini
+# LLM
+LLM_PROVIDER=ollama
+LLM_MODEL_NAME=qwen2.5:7b
+OLLAMA_BASE_URL=http://localhost:11434
+OPENAI_BASE_URL=http://localhost:11434/v1
+
+# Voice STT
+STT_PROVIDER=faster_whisper
+FASTER_WHISPER_URL=http://localhost:8000
+
+# Voice TTS
+TTS_PROVIDER=coqui_xtts
+XTTS_URL=http://localhost:8020
+XTTS_SPEAKER_WAV=/path/to/reference_voice.wav   # 3-10s WAV for voice cloning
+
+# Database
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/load_agri
+
+# Moderation (optional)
+ENABLE_MODERATION=false
+```
+
+See `.env.example` for all available options including vLLM and OpenRouter configuration.
+
+---
+
+### Step 3 — Database Migrations
+
+Run migrations to set up the PostgreSQL schema:
+
+```bash
+alembic upgrade head
+```
+
+Other migration commands:
+```bash
+alembic current    # check current version
+alembic history    # view migration history
+
+# Auto-generate migration from model changes
+alembic revision --autogenerate -m "description of changes"
+```
+
+---
+
+### Step 4 — Start the API
+
+```bash
+cd D:/oan-ai-api-feature-ATI
+conda activate protean
+python main.py
+```
+
+The server starts on `http://localhost:8000`.
+
+---
+
+## Testing
+
+### Health check
+Confirms the API is up (no Ollama dependency):
+```bash
+curl http://localhost:8000/api/health/live
+# Expected: {"status": "alive"}
+```
+
+### Text chat — LLM + tool calling
+Tests the full Ollama → tool dispatch → response path:
+```bash
+curl -X POST http://localhost:8000/api/chat/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What is the price of Teff in Adama?",
+    "session_id": "test-1",
+    "source_lang": "en",
+    "target_lang": "en",
+    "user_id": "test"
+  }'
+```
+
+Expected server logs:
+```
+LLM call round 1...
+Tool call #1: get_crop_price_quick({'crop_name': 'Teff', 'marketplace_name': 'Adama'})
+Tool get_crop_price_quick completed in ...ms
+Response complete after 2 round(s)
+```
+
+### Quickest sanity check
+```bash
+curl -s -X POST http://localhost:8000/api/chat/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What crops are available in Adama?",
+    "session_id": "test-1",
+    "source_lang": "en",
+    "target_lang": "en",
+    "user_id": "test"
+  }' | head -c 500
+```
+If this returns streamed text with crop/market data, the LLM + tool pipeline is fully working.
+
+### STT smoke test — faster-whisper directly
+```bash
+curl -X POST http://localhost:8000/v1/audio/transcriptions \
+  -F "file=@some_audio.wav" \
+  -F "model=Systran/faster-whisper-medium" \
+  -F "language=en"
+# Expected: {"text": "your transcribed speech"}
+```
+
+### TTS smoke test — Coqui XTTS directly
+```bash
+curl -X POST http://localhost:8020/tts_stream \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello farmer", "language": "en", "speaker_wav": ""}' \
+  --output test_out.wav
+# Expected: test_out.wav contains audible speech
+```
+
+### Voice pipeline — full end-to-end
+Connect a WebSocket to `ws://localhost:8000/api/conv/ws?lang=en` and stream PCM audio.
+
+Expected server logs for a complete turn:
+```
+FasterWhisperSTTService: url=http://localhost:8000
+STT: 'price of teff in adama'
+Tool call #1: get_crop_price_quick(...)
+TTS START: 'The current price...'
+TTS: Complete (N frames)
+```
+
+---
+
+## Switching Providers
+
+All providers are swappable via `.env` without code changes:
+
+| Service | Env var | Options |
+|---|---|---|
+| LLM | `LLM_PROVIDER` | `ollama` · `vllm` · `openai` |
+| STT | `STT_PROVIDER` | `faster_whisper` |
+| TTS | `TTS_PROVIDER` | `coqui_xtts` |
+
+---
+
+## Market Data Scraper
+
+Syncs crop and livestock prices from NMIS API (nmis.et) with bilingual support (English/Amharic). Clears prices and logs each run to database.
+
+```bash
+python scripts/run_all_scrapers.py
+```
+
+Cron (daily 6 AM):
+```
+0 6 * * * cd /path/to/load_agri && python scripts/run_all_scrapers.py >> /var/log/scraper.log 2>&1
+```
+
+---
+
+## Deploying with Docker Compose
+
+Start the full application stack:
 ```bash
 docker compose up --build --force-recreate --detach
 ```
@@ -91,44 +275,7 @@ View application logs:
 docker logs -f oan_app
 ```
 
-## Database Migrations
-
-This project uses Alembic for database migrations.
-
-### Run Migrations
-```bash
-# Run all pending migrations
-alembic upgrade head
-
-# Check current migration version
-alembic current
-
-# View migration history
-alembic history
-```
-
-### Create New Migration
-```bash
-# Auto-generate migration from model changes
-alembic revision --autogenerate -m "description of changes"
-
-# Review the generated migration file in alembic/versions/
-# Then run the migration
-alembic upgrade head
-```
-
-## Market Data Scraper
-
-Syncs crop and livestock prices from NMIS API (nmis.et) with bilingual support (English/Amharic). Clears prices and logs each run to database.
-
-```bash
-python scripts/run_all_scrapers.py
-```
-
-Cron (daily 6 AM):
-```
-0 6 * * * cd /path/to/load_agri && python scripts/run_all_scrapers.py >> /var/log/scraper.log 2>&1
-```
+---
 
 ## API Reference
 

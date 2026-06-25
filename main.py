@@ -27,6 +27,17 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting up MahaVistaar AI API...")
 
+    # Initialize Langfuse client (no-op if disabled/misconfigured)
+    try:
+        from helpers.langfuse_client import get_client, is_enabled
+        if is_enabled():
+            get_client()
+            logger.info("✅ Langfuse tracing enabled")
+        else:
+            logger.info("ℹ️  Langfuse tracing disabled")
+    except Exception as e:
+        logger.warning(f"⚠️ Langfuse init skipped: {e}")
+
     # Test cache connection
     try:
         await cache.set("health_check", "ok", ttl=60)
@@ -41,12 +52,55 @@ async def lifespan(app: FastAPI):
     # Initialize database connection pool
     logger.info("✅ Database engine initialized")
 
+    # Initialize telemetry DB pool
+    if settings.telemetry_db_url:
+        try:
+            from app.tasks.telemetry import init_telemetry_pool
+            await init_telemetry_pool(settings.telemetry_db_url)
+            logger.info("✅ Telemetry DB pool initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ Telemetry DB pool init failed: {e}")
+
+    # Pre-load TTS models to avoid first-request memory/latency spike
+    try:
+        from app.services.providers.tts import get_tts_provider
+        tts = get_tts_provider()
+        await tts._load_model("en")
+        await tts._load_model("am")
+        logger.info("✅ TTS models pre-loaded (en, am)")
+    except Exception as e:
+        logger.warning(f"⚠️ TTS pre-load failed (will load on first request): {e}")
+
     logger.info("✅ Application startup complete")
 
     yield
 
     # Shutdown
     logger.info("Shutting down MahaVistaar AI API...")
+
+    # Close telemetry pool
+    try:
+        from app.tasks.telemetry import close_telemetry_pool
+        await close_telemetry_pool()
+        logger.info("✅ Telemetry pool closed")
+    except Exception as e:
+        logger.warning(f"⚠️ Telemetry pool close failed: {e}")
+
+    # Cleanup TTS provider
+    try:
+        from app.services.providers.tts import cleanup_tts_provider
+        cleanup_tts_provider()
+        logger.info("✅ TTS provider cleaned up")
+    except Exception as e:
+        logger.warning(f"⚠️ TTS cleanup failed: {e}")
+
+    # Flush Langfuse events
+    try:
+        from helpers.langfuse_client import shutdown as langfuse_shutdown
+        langfuse_shutdown()
+        logger.info("✅ Langfuse flushed")
+    except Exception as e:
+        logger.warning(f"⚠️ Langfuse flush failed: {e}")
 
     # Close database connections
     await close_db()

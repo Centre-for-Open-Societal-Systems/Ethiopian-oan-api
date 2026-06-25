@@ -616,6 +616,10 @@ def get_prompt(prompt_file: str, context: Dict = {}, prompt_dir: str = "assets/p
         autoescape=False  # We don't want HTML escaping for our prompts
     )
 
+    # Fall back to English if the requested language prompt doesn't exist
+    if not os.path.exists(os.path.join(prompt_dir, prompt_file)):
+        prompt_file = "en.md"
+
     # Get the template
     template = env.get_template(prompt_file)
 
