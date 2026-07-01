@@ -323,7 +323,7 @@ def call_app(query: str, lang: str, session_id: str) -> tuple[str, str, float, l
     )
     t0 = time.perf_counter()
     try:
-        resp = urllib.request.urlopen(req, timeout=60)
+        resp = urllib.request.urlopen(req, timeout=int(os.getenv("EVAL_HTTP_TIMEOUT", "60")))
         raw  = resp.read().decode()
         wall_ms = (time.perf_counter() - t0) * 1000
         lines = [ln for ln in raw.splitlines() if ln.strip()]

@@ -26,6 +26,11 @@ IS_QWEN3_MODEL = 'qwen3' in MODEL_NAME.lower()
 RERANK_ENABLED = os.getenv('RAG_RERANK', 'false').lower() == 'true'
 RERANKER_MODEL_NAME = os.getenv('RAG_RERANKER_MODEL', 'BAAI/bge-reranker-v2-m3')
 RERANK_CANDIDATES = int(os.getenv('RAG_RERANK_CANDIDATES', '20'))  # candidate pool size before rerank
+# Truncate each (query, passage) pair before scoring. Our KB "chunks" are whole
+# documents (~3k tokens), and bge-reranker-v2-m3 defaults to an 8192-token window,
+# so scoring full docs is ~6 min/query on CPU. 512 is the conventional reranker
+# length and keeps a query under a couple of seconds.
+RERANK_MAX_LENGTH = int(os.getenv('RAG_RERANK_MAX_LENGTH', '512'))
 
 
 class CosdataSearchHit(BaseModel):
@@ -75,8 +80,8 @@ def get_reranker_model():
     Mirrors get_embedding_model(). Downloaded from HuggingFace on first use.
     """
     from sentence_transformers import CrossEncoder
-    logger.info(f"Loading reranker model: {RERANKER_MODEL_NAME}")
-    return CrossEncoder(RERANKER_MODEL_NAME)
+    logger.info(f"Loading reranker model: {RERANKER_MODEL_NAME} (max_length={RERANK_MAX_LENGTH})")
+    return CrossEncoder(RERANKER_MODEL_NAME, max_length=RERANK_MAX_LENGTH)
 
 
 def _rerank_hits(query: str, hits: List["CosdataSearchHit"], top_k: int) -> List["CosdataSearchHit"]:
@@ -158,8 +163,12 @@ def load_document_store():
     import json
     from pathlib import Path
 
-    # Use the combined agricultural docs file
-    doc_store_path = Path(__file__).parent.parent.parent / "assets" / "all_agricultural_docs.json"
+    # Use the chunked agricultural docs as the source of truth for returned text
+    # (Task #5). Override with COSDATA_DOC_STORE for the whole-doc file or any other
+    # store; lookup-by-id is unchanged (chunk ids are `{parent}#c{n}`, matching the
+    # re-indexed vector ids).
+    store_name = os.getenv("COSDATA_DOC_STORE", "all_agricultural_docs_chunked.json")
+    doc_store_path = Path(__file__).parent.parent.parent / "assets" / store_name
 
     if not doc_store_path.exists():
         logger.warning(f"Document store not found: {doc_store_path}")
