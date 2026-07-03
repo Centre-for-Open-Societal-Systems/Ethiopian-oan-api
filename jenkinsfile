@@ -3,7 +3,7 @@ pipeline {
     environment {
         AWS_REGION   = 'ap-south-1'
         ECR_REGISTRY = '379220350808.dkr.ecr.ap-south-1.amazonaws.com'
-        ECR_REPO     = 'ai-backend-pipeline-v1'
+        ECR_REPO     = 'ai-backend-pipeline'
         VERSION_SUFFIX = '1'
     }
     stages {
