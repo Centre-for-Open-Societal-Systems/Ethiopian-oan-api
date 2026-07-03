@@ -2,7 +2,7 @@ pipeline {
     agent any
     environment {
         AWS_REGION   = 'ap-south-1'
-        ECR_REGISTRY = '3792-2035-0808.dkr.ecr.ap-south-1.amazonaws.com'
+        ECR_REGISTRY = '379220350808.dkr.ecr.ap-south-1.amazonaws.com'
         ECR_REPO     = 'ai-backend-pipeline-v1'
         VERSION_SUFFIX = '1'
     }
