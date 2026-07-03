@@ -3,13 +3,17 @@ pipeline {
     environment {
         AWS_REGION   = 'ap-south-1'
         ECR_REGISTRY = '3792-2035-0808.dkr.ecr.ap-south-1.amazonaws.com'
-        ECR_REPO     = 'ai-backend-pipeline'
-        IMAGE_TAG    = "${sh(script: 'date +%d%m%Y', returnStdout: true).trim()}.${env.BUILD_NUMBER}.1"
+        ECR_REPO     = 'ai-backend-pipeline-v1'
+        VERSION_SUFFIX = '1'
     }
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
+
+                script {
+                 env.IMAGE_TAG = "${sh(script: 'date +%d%m%Y', returnStdout: true).trim()}.${env.BUILD_NUMBER}.${env.VERSION_SUFFIX}"
+                }
                 echo "Branch: ${env.GIT_BRANCH}"
                 echo "Commit: ${env.GIT_COMMIT}"
                 echo "Image Tag: ${env.IMAGE_TAG}"
