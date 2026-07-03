@@ -217,21 +217,21 @@ async def _stream_chat_messages_impl(
 
     # ⏱️ STAGE 4: Main agent execution (Phase 3: FastGeminiService)
     stage_start = time.perf_counter()
-    
+
     # Initialize Fast Service with correct language (sets system prompt)
     fast_chat = FastGeminiService(lang=target_lang)
     metrics = {}
-    
+
     # Construct Full Prompt (History + Query)
     # user_message already contains history formatted in Stage 1
     # FastGeminiService handles System Prompt internally via __init__
-    
+
     full_text = ""
     # Use generate_response to stream/accumulate text and execute tools
     async for chunk in fast_chat.generate_response(user_message, metrics):
         if chunk:
             full_text += chunk
-            
+
     llm_exec_time = (time.perf_counter() - stage_start) * 1000
     logger.info(f"⏱️ [TIMING] Main agent execution (FastGemini): {llm_exec_time:.2f}ms")
     
@@ -348,6 +348,11 @@ async def _stream_chat_messages_impl(
             "tts_synthesis": "N/A",
             "total_e2e_latency": round(e2e_total, 2)
         }
+
+        # Dev/eval only: surface the retrieved RAG chunks (and the LLM-generated
+        # search query) so the RAGAS eval can score retrieval. Off in prod.
+        if settings.eval_expose_contexts:
+            response_data["metrics"]["contexts"] = metrics.get("rag_contexts", [])
             
     except Exception as e:
         logger.error(f"Error generating metrics table: {e}")

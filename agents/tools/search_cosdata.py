@@ -20,6 +20,18 @@ MODEL_NAME = os.getenv('EMBEDDING_MODEL_NAME', 'intfloat/multilingual-e5-large')
 # Detect if using Qwen3 model
 IS_QWEN3_MODEL = 'qwen3' in MODEL_NAME.lower()
 
+# Cross-encoder reranker (Task #3 experiment). Default off. When enabled, an
+# over-fetched candidate pool from the dense search is re-ranked by (query, chunk)
+# relevance and cut to top_k, lifting fact-bearing chunks the dense search ranked low.
+RERANK_ENABLED = os.getenv('RAG_RERANK', 'false').lower() == 'true'
+RERANKER_MODEL_NAME = os.getenv('RAG_RERANKER_MODEL', 'BAAI/bge-reranker-v2-m3')
+RERANK_CANDIDATES = int(os.getenv('RAG_RERANK_CANDIDATES', '20'))  # candidate pool size before rerank
+# Truncate each (query, passage) pair before scoring. Our KB "chunks" are whole
+# documents (~3k tokens), and bge-reranker-v2-m3 defaults to an 8192-token window,
+# so scoring full docs is ~6 min/query on CPU. 512 is the conventional reranker
+# length and keeps a query under a couple of seconds.
+RERANK_MAX_LENGTH = int(os.getenv('RAG_RERANK_MAX_LENGTH', '512'))
+
 
 class CosdataSearchHit(BaseModel):
     """Individual search hit from Cosdata"""
@@ -59,6 +71,31 @@ def get_embedding_model():
         return SentenceTransformer(MODEL_NAME, trust_remote_code=True)
     else:
         return SentenceTransformer(MODEL_NAME)
+
+
+@lru_cache(maxsize=1)
+def get_reranker_model():
+    """
+    Lazily load and cache the cross-encoder reranker (multilingual, local).
+    Mirrors get_embedding_model(). Downloaded from HuggingFace on first use.
+    """
+    from sentence_transformers import CrossEncoder
+    logger.info(f"Loading reranker model: {RERANKER_MODEL_NAME} (max_length={RERANK_MAX_LENGTH})")
+    return CrossEncoder(RERANKER_MODEL_NAME, max_length=RERANK_MAX_LENGTH)
+
+
+def _rerank_hits(query: str, hits: List["CosdataSearchHit"], top_k: int) -> List["CosdataSearchHit"]:
+    """
+    Re-rank candidate hits by cross-encoder (query, chunk) relevance and keep the top_k.
+    Overwrites each hit's score with the rerank score so logs/capture reflect the new ranking.
+    """
+    model = get_reranker_model()
+    pairs = [[query, hit.processed_text] for hit in hits]
+    scores = model.predict(pairs)
+    for hit, score in zip(hits, scores):
+        hit.score = float(score)
+    ranked = sorted(hits, key=lambda h: h.score, reverse=True)
+    return ranked[:top_k]
 
 
 def generate_query_embeddings(texts: List[str]) -> List[List[float]]:
@@ -126,8 +163,12 @@ def load_document_store():
     import json
     from pathlib import Path
 
-    # Use the combined agricultural docs file
-    doc_store_path = Path(__file__).parent.parent.parent / "assets" / "all_agricultural_docs.json"
+    # Use the chunked agricultural docs as the source of truth for returned text
+    # (Task #5). Override with COSDATA_DOC_STORE for the whole-doc file or any other
+    # store; lookup-by-id is unchanged (chunk ids are `{parent}#c{n}`, matching the
+    # re-indexed vector ids).
+    store_name = os.getenv("COSDATA_DOC_STORE", "all_agricultural_docs_chunked.json")
+    doc_store_path = Path(__file__).parent.parent.parent / "assets" / store_name
 
     if not doc_store_path.exists():
         logger.warning(f"Document store not found: {doc_store_path}")
@@ -151,7 +192,8 @@ def load_document_store():
 def search_documents_cosdata(
     query: str,
     top_k: int = 10,
-    type: Optional[str] = None
+    type: Optional[str] = None,
+    capture: Optional[dict] = None,
 ) -> str:
     """
     Semantic search for agricultural knowledge documents and videos using Cosdata vector database.
@@ -161,6 +203,10 @@ def search_documents_cosdata(
         top_k: Maximum number of results to return (default: 10)
         type: Filter by document type: [`video`, `document`].
               Default is None, which means all types are considered.
+        capture: Optional dict (dev/eval only). When provided, it is populated with the
+              structured retrieval result — `search_query`, `contexts` (per-chunk text),
+              `scores`, and `doc_ids` — so the RAGAS eval can score retrieval. Does not
+              affect the returned string or any prod behavior.
 
     Returns:
         search_results: Formatted string with search results or message if no data available
@@ -182,9 +228,13 @@ def search_documents_cosdata(
         logger.info(f"RAG embedding generation took {embedding_time:.3f}s for query: '{query}'")
         print(f"\n[RAG] Embedding generation: {embedding_time:.3f}s | Query: '{query}'", flush=True)
 
+        # When reranking, build a larger candidate pool so the cross-encoder has more
+        # to promote from; otherwise keep the existing top_k behaviour unchanged.
+        candidate_limit = max(top_k * 2, RERANK_CANDIDATES) if RERANK_ENABLED else top_k
+
         # Perform vector search using dense search
         search_start = time.time()
-        search_results = collection.search.dense(query_embedding, top_k=top_k * 2)  # Get extra for filtering
+        search_results = collection.search.dense(query_embedding, top_k=candidate_limit * 2)  # Get extra for filtering
         search_time = time.time() - search_start
         logger.info(f"RAG vector search took {search_time:.3f}s")
         print(f"[RAG] Vector search: {search_time:.3f}s", flush=True)
@@ -194,12 +244,14 @@ def search_documents_cosdata(
         if not results:
             total_time = time.time() - start_time
             logger.info(f"RAG total time: {total_time:.3f}s - No results found")
+            if capture is not None:
+                capture.update({"search_query": query, "contexts": [], "scores": [], "doc_ids": []})
             return f"No results found for `{query}`. The information you're looking for may not be available in our knowledge base."
 
         # Build search hits from results using document store
         search_hits = []
         for result in results:
-            if len(search_hits) >= top_k:
+            if len(search_hits) >= candidate_limit:
                 break
 
             vector_id = result.get('id', '')
@@ -228,7 +280,24 @@ def search_documents_cosdata(
         if not search_hits:
             total_time = time.time() - start_time
             logger.info(f"RAG total time: {total_time:.3f}s - No results after filtering")
+            if capture is not None:
+                capture.update({"search_query": query, "contexts": [], "scores": [], "doc_ids": []})
             return f"No results found for `{query}`. The information you're looking for may not be available in our knowledge base."
+
+        # Re-rank the candidate pool and cut to top_k (Task #3, behind RAG_RERANK).
+        # Runs before capture/formatting so logs, contexts, and the returned string
+        # all reflect the reranked order.
+        if RERANK_ENABLED and len(search_hits) > 1:
+            rerank_start = time.time()
+            search_hits = _rerank_hits(query, search_hits, top_k)
+            print(f"[RAG] Rerank: {time.time() - rerank_start:.3f}s | kept top {len(search_hits)}", flush=True)
+
+        # Surface structured contexts for the eval harness (dev/eval only).
+        if capture is not None:
+            capture["search_query"] = query
+            capture["contexts"] = [hit.processed_text for hit in search_hits]
+            capture["scores"] = [hit.score for hit in search_hits]
+            capture["doc_ids"] = [hit.doc_id for hit in search_hits]
 
         # Format results
         document_string = '\n\n----\n\n'.join([str(doc) for doc in search_hits])
