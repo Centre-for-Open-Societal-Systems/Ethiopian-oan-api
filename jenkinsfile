@@ -28,6 +28,21 @@ pipeline {
                 '''
             }
         }
+
+        stage('Cleanup Before Push') {
+            steps {
+                sh '''
+                    echo "Cleaning up dangling/old images before pushing to ECR..."
+
+                    docker image prune -f || true
+
+                    docker images "$ECR_REGISTRY/$ECR_REPO" --format "{{.Repository}}:{{.Tag}}" \
+                        | grep -v ":$IMAGE_TAG$" \
+                        | grep -v ":latest$" \
+                        | xargs -r docker rmi -f || true
+                '''
+            }
+        }
         stage('Push to ECR') {
             steps {
                 sh '''
